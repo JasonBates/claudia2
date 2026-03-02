@@ -13,7 +13,7 @@ import PlanApprovalBar from "./components/PlanApprovalBar";
 import PermissionDialog from "./components/PermissionDialog";
 import Sidebar from "./components/Sidebar";
 import ErrorFallback from "./components/ErrorFallback";
-import { sendMessage, resumeSession, getSessionHistory, clearSession, sendPermissionResponse, sendQuestionResponse, sendQuestionCancel, getSchemeColors, openInNewWindow, openNewWindowWithPicker, getConfig, saveConfig, checkForUpdate, downloadAndInstallUpdate, restartApp, getAppVersion, hasBotApiKey, listProjects, reopenInDirectory, getLaunchDir, hasCliDirectory, checkClaudeCodeInstalled } from "./lib/tauri";
+import { sendMessage, resumeSession, getSessionHistory, clearSession, sendPermissionResponse, sendQuestionResponse, sendQuestionCancel, getSchemeColors, openInNewWindow, openNewWindowWithPicker, getConfig, saveConfig, checkForUpdate, downloadAndInstallUpdate, restartApp, getAppVersion, hasBotApiKey, listProjects, reopenInDirectory, getLaunchDir, hasCliDirectory, getPendingResume, checkClaudeCodeInstalled } from "./lib/tauri";
 import type { ProjectInfo } from "./lib/tauri";
 import type { ThemeSettings } from "./lib/theme-utils";
 import { getContextThreshold, DEFAULT_CONTEXT_LIMIT } from "./lib/context-utils";
@@ -813,7 +813,11 @@ function App() {
     console.log("[RESUME] Resuming session:", sessionId);
 
     resetSessionState();
-    sidebar.toggleSidebar();
+    // Close the sidebar if it's open (e.g. user picked from sidebar).
+    // Don't toggle — that would open it when auto-resuming from pending-launch.
+    if (!sidebar.collapsed()) {
+      sidebar.toggleSidebar();
+    }
 
     const workingDir = session.workingDir();
     if (!workingDir) {
@@ -1240,8 +1244,16 @@ function App() {
     // If so, skip the project picker and start directly in that directory
     const wasExplicitlyLaunched = await hasCliDirectory();
     if (wasExplicitlyLaunched) {
-      console.log("[MOUNT] Explicit CLI directory provided, skipping picker");
-      await continueWithStartup();
+      const pendingResume = await getPendingResume();
+      if (pendingResume) {
+        console.log("[MOUNT] --resume flag detected, auto-resuming session:", pendingResume);
+        await continueWithStartup();
+        // Auto-resume after the base session is established
+        setTimeout(() => handleResumeSession(pendingResume), 500);
+      } else {
+        console.log("[MOUNT] Explicit CLI directory provided, skipping picker");
+        await continueWithStartup();
+      }
     } else {
       // Check how many projects exist to decide startup flow
       try {

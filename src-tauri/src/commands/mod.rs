@@ -53,6 +53,8 @@ pub struct AppState {
     /// Whether a specific directory was provided via CLI argument
     /// Used to skip project picker when app is reopened in a specific directory
     pub has_cli_directory: bool,
+    /// Session ID to auto-resume on startup (from --resume CLI flag)
+    pub resume_session_id: Option<String>,
     /// Unique session ID for this app instance (used for multi-instance safety)
     pub session_id: String,
     /// Monotonic counter to detect superseded requests (prevents concurrent event loop hangs)
@@ -64,12 +66,12 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Create new AppState with optional CLI-provided directory
-    pub fn new(cli_dir: Option<String>) -> Self {
-        // Track if a directory was explicitly provided (via CLI arg or env var)
+    /// Create new AppState with optional CLI-provided directory and resume session
+    pub fn new(cli_dir: Option<String>, resume_session_id: Option<String>) -> Self {
+        // Track if a directory was explicitly provided (via CLI arg, env var, or --resume)
         // This is used to skip the project picker on reopen
         let has_cli_directory =
-            cli_dir.is_some() || std::env::var("CLAUDIA_LAUNCH_DIR").ok().is_some();
+            cli_dir.is_some() || resume_session_id.is_some() || std::env::var("CLAUDIA_LAUNCH_DIR").ok().is_some();
 
         // Use CLI directory if provided, then check CLAUDIA_LAUNCH_DIR env var,
         // otherwise default to home directory.
@@ -99,6 +101,7 @@ impl AppState {
             config: Arc::new(Mutex::new(config)),
             launch_dir,
             has_cli_directory,
+            resume_session_id,
             session_id,
             request_generation: AtomicU64::new(0),
             bg_pump_handle: Arc::new(Mutex::new(None)),
@@ -108,7 +111,7 @@ impl AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::new(None)
+        Self::new(None, None)
     }
 }
 

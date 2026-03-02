@@ -98,6 +98,15 @@ pub fn has_cli_directory(state: tauri::State<'_, AppState>) -> bool {
     state.has_cli_directory
 }
 
+/// Get the pending resume session ID if the app was launched with --resume.
+///
+/// Returns the session ID to auto-resume, or null if no resume was requested.
+/// Used by the frontend to trigger auto-resume on startup.
+#[tauri::command]
+pub fn get_pending_resume(state: tauri::State<'_, AppState>) -> Option<String> {
+    state.resume_session_id.clone()
+}
+
 /// Close current window and open a new one in the specified directory.
 ///
 /// This effectively "reopens" the app in a different project by:

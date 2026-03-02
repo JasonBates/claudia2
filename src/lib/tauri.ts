@@ -530,6 +530,14 @@ export async function hasCliDirectory(): Promise<boolean> {
 }
 
 /**
+ * Get the pending resume session ID if the app was launched with --resume.
+ * Returns null if no resume was requested.
+ */
+export async function getPendingResume(): Promise<string | null> {
+  return await invoke<string | null>("get_pending_resume");
+}
+
+/**
  * Status of Claude Code CLI installation
  */
 export interface ClaudeCodeStatus {
