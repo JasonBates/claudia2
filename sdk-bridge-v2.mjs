@@ -231,7 +231,13 @@ async function main() {
 
     // Resume session if provided (e.g., after interrupt)
     // Or from environment variable (e.g., app startup with --resume)
-    const sessionToResume = resumeSessionId || process.env.CLAUDE_RESUME_SESSION;
+    // resumeSessionId=false means "force fresh session" (skip env var too)
+    let sessionToResume;
+    if (resumeSessionId === false) {
+      sessionToResume = null; // Force fresh - skip env var
+    } else {
+      sessionToResume = resumeSessionId || process.env.CLAUDE_RESUME_SESSION;
+    }
     if (sessionToResume) {
       debugLog("RESUME", `Resuming session: ${sessionToResume}`);
       args.push("--resume", sessionToResume);
@@ -2321,6 +2327,7 @@ async function main() {
 
     // Handle Claude process exit - always respawn unless shutting down
     // Rate limiting (respawnCount/respawnWindowStart) prevents infinite loops
+    // After repeated failures, falls back to fresh spawn (no --resume)
     claude.on("close", (code) => {
       debugLog("CLAUDE_CLOSE", { code, isInterrupting, isShuttingDown, sessionId: currentSessionId });
 
@@ -2347,18 +2354,27 @@ async function main() {
         }
         respawnCount++;
 
-        if (respawnCount > 3) {
+        if (respawnCount > 5) {
           debugLog("RESPAWN", `Too many respawns (${respawnCount} in 30s), exiting bridge`);
           sendEvent("closed", { code });
           process.exit(code || 1);
           return;
         }
 
-        debugLog("RESPAWN", `Claude exited unexpectedly (code ${code}), respawning (${respawnCount}/3)...`);
+        debugLog("RESPAWN", `Claude exited unexpectedly (code ${code}), respawning (${respawnCount}/5)...`);
       }
 
       setImmediate(() => {
-        spawnClaude(sessionToResume);
+        // After repeated unexpected exits, drop --resume and start fresh.
+        // This is a safety net for cases where resume is genuinely broken
+        // (e.g., corrupted session state). The readySent guard in handleInterrupt
+        // prevents the common double-Escape scenario from reaching this path.
+        if (respawnCount >= 2) {
+          debugLog("RESPAWN", "Dropping --resume after repeated failures, starting fresh session");
+          spawnClaude(false); // false = force fresh, skip env var too
+        } else {
+          spawnClaude(sessionToResume);
+        }
       });
     });
 
@@ -2456,6 +2472,14 @@ async function main() {
   // Handle interrupt - kill Claude process to stop generation immediately
   function handleInterrupt() {
     if (!claude || isInterrupting) return;
+
+    // Don't kill Claude during initialization/resume - there's nothing to
+    // interrupt yet, and killing mid-resume corrupts the session state,
+    // making future --resume attempts fail (losing conversation history).
+    if (!readySent) {
+      debugLog("INTERRUPT", "Ignoring interrupt - Claude still initializing");
+      return;
+    }
 
     debugLog("INTERRUPT", "Killing Claude process to interrupt");
     isInterrupting = true;
