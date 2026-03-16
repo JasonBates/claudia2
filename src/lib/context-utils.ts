@@ -4,14 +4,14 @@
 
 export type ContextThreshold = 'critical' | 'warning' | 'ok';
 
-export const DEFAULT_CONTEXT_LIMIT = 200_000;
+export const DEFAULT_CONTEXT_LIMIT = 1_000_000;
 
 /**
  * Calculates the context threshold level based on token usage
  *
  * @param usedTokens - Number of tokens currently used
- * @param limit - Maximum context window size (defaults to 200k)
- * @returns 'critical' if >= 75%, 'warning' if >= 60%, 'ok' otherwise
+ * @param limit - Maximum context window size (defaults to 1M)
+ * @returns 'critical' if >= 90%, 'warning' if >= 75%, 'ok' otherwise
  */
 export function getContextThreshold(
   usedTokens: number,
@@ -20,8 +20,8 @@ export function getContextThreshold(
   if (limit <= 0) return 'ok';
 
   const percent = (usedTokens / limit) * 100;
-  if (percent >= 75) return 'critical';
-  if (percent >= 60) return 'warning';
+  if (percent >= 90) return 'critical';
+  if (percent >= 75) return 'warning';
   return 'ok';
 }
 
