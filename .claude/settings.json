@@ -4,22 +4,22 @@
   },
   "permissions": {
     "allow": [
-      "npm run dev",
-      "npm run build",
-      "npm run test",
-      "npm run test:run",
-      "npm run test:rust",
-      "npm run test:all",
-      "npm run tauri *",
-      "./scripts/run.sh *",
-      "./scripts/setup.sh",
-      "./scripts/collect-debug-logs.sh *",
-      "./scripts/bugtime.sh",
-      "cargo test *",
-      "cargo build *",
-      "cargo check *",
-      "npx tauri *",
-      "npx vitest *"
+      "Bash(npm run dev)",
+      "Bash(npm run build)",
+      "Bash(npm run test)",
+      "Bash(npm run test:run)",
+      "Bash(npm run test:rust)",
+      "Bash(npm run test:all)",
+      "Bash(npm run tauri *)",
+      "Bash(./scripts/run.sh *)",
+      "Bash(./scripts/setup.sh)",
+      "Bash(./scripts/collect-debug-logs.sh *)",
+      "Bash(./scripts/bugtime.sh)",
+      "Bash(cargo test *)",
+      "Bash(cargo build *)",
+      "Bash(cargo check *)",
+      "Bash(npx tauri *)",
+      "Bash(npx vitest *)"
     ]
   }
 }
