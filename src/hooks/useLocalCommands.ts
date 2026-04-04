@@ -3,7 +3,7 @@ import type { UseSessionReturn } from "./useSession";
 import type { UseSidebarReturn } from "./useSidebar";
 import { ClaudeEvent, clearSession, sendInterrupt, quitApp, runStreamingCommand, CommandEvent } from "../lib/tauri";
 import type { Message, ToolUse, ContentBlock } from "../lib/types";
-import { estimateCost, formatTokenCount, getContextPercentage, DEFAULT_CONTEXT_LIMIT } from "../lib/context-utils";
+import { estimateCost, formatTokenCount, getContextPercentage, getContextLimit } from "../lib/context-utils";
 
 // Streaming messages interface - defined locally since there's no separate hook
 export interface UseStreamingMessagesReturn {
@@ -518,13 +518,14 @@ export function useLocalCommands(options: UseLocalCommandsOptions): UseLocalComm
     const model = info.model || "unknown";
 
     const cost = estimateCost(inputTokens, outputTokens, model);
-    const contextPercent = Math.round(getContextPercentage(inputTokens));
+    const limit = getContextLimit(model);
+    const contextPercent = Math.round(getContextPercentage(inputTokens, limit));
 
     const output = [
       `Model: ${model}`,
       `Input tokens: ${formatTokenCount(inputTokens)} (~$${cost.inputCost.toFixed(4)})`,
       `Output tokens: ${formatTokenCount(outputTokens)} (~$${cost.outputCost.toFixed(4)})`,
-      `Context used: ${contextPercent}% of ${formatTokenCount(DEFAULT_CONTEXT_LIMIT)}`,
+      `Context used: ${contextPercent}% of ${formatTokenCount(limit)}`,
       `---`,
       `Estimated session cost: ~$${cost.totalCost.toFixed(4)}`,
     ].join("\n");

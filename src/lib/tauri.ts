@@ -122,6 +122,7 @@ export interface Config {
   window_height?: number;
   permission_mode?: string; // "auto" | "request" | "plan" | "bot"
   sandbox_enabled?: boolean;
+  extended_context?: boolean;
   claude_model?: string;
   claude_binary_path?: string;
   node_binary_path?: string;

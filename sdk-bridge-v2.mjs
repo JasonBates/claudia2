@@ -138,6 +138,7 @@ async function main() {
   let respawnCount = 0;      // Rate-limit unexpected respawns
   let respawnWindowStart = Date.now();
   let isWarmingUp = false;   // Suppress events during warmup
+  let extended1mEnabled = process.env.CLAUDIA_EXTENDED_CONTEXT === "1"; // Track 1M context window toggle
   let currentToolId = null;  // Track current tool ID for tool_result matching
   let currentToolName = null; // Track current tool name for subagent detection
 
@@ -195,7 +196,8 @@ async function main() {
 
   // Build Claude args - optionally resume a session
   function buildClaudeArgs(resumeSessionId = null) {
-    const model = (process.env.CLAUDIA_MODEL || "").trim() || "opus";
+    const baseModel = (process.env.CLAUDIA_MODEL || "").trim() || "opus";
+    const model = extended1mEnabled ? `${baseModel.replace(/\[1m\]$/i, "")}[1m]` : baseModel;
     const settings = { alwaysThinkingEnabled: true };
 
     // Enable SDK sandbox when CLAUDIA_SANDBOX is set
@@ -2694,8 +2696,36 @@ async function main() {
           // Not JSON, continue to send as user message
         }
 
+        // Handle /1m locally (toggle extended context window)
+        const trimmedLower = text.trim().toLowerCase();
+        if (trimmedLower.startsWith("/1m")) {
+          const parts = trimmedLower.split(/\s+/);
+          const arg = parts[1];
+          const baseModel = (process.env.CLAUDIA_MODEL || "").trim().replace(/\[1m\]$/i, "") || "opus";
+          if (arg === "on") extended1mEnabled = true;
+          else if (arg === "off") extended1mEnabled = false;
+          else extended1mEnabled = !extended1mEnabled;
+          const newModel = extended1mEnabled ? `${baseModel}[1m]` : baseModel;
+          const newLimit = extended1mEnabled ? "1M" : "200K";
+          debugLog("1M_TOGGLE", { model: newModel, enabled: extended1mEnabled });
+          const modelMsg = JSON.stringify({
+            type: "user",
+            message: { role: "user", content: `/model ${newModel}` },
+            session_id: currentSessionId,
+            parent_tool_use_id: null
+          }) + "\n";
+          if (claude && claude.stdin.writable) {
+            claude.stdin.write(modelMsg);
+          }
+          // Emit ready with updated model so frontend updates context limit display
+          sendEvent("ready", { sessionId: currentSessionId, model: newModel, tools: 0 });
+          sendEvent("status", { message: `Context window: ${newLimit}` });
+          sendEvent("done", {});
+          return;
+        }
+
         // Handle /sandbox locally (CLI doesn't support it in stream-json mode)
-        if (text.trim().toLowerCase() === "/sandbox") {
+        if (trimmedLower === "/sandbox") {
           const isEnabled = process.env.CLAUDIA_SANDBOX === "1";
           const domains = isEnabled ? SANDBOX_ALLOWED_DOMAINS : [];
           let status = isEnabled
@@ -2733,9 +2763,34 @@ async function main() {
           return;
         case "help":
           sendEvent("status", {
-            message: "Commands: /compact, /clear, /cost, /model, /status, /config, /memory, /review, /doctor, /exit"
+            message: "Commands: /compact, /clear, /cost, /model, /1m, /status, /config, /memory, /review, /doctor, /exit"
           });
           return;
+        case "1m": {
+          // Toggle or set extended 1M context window by switching model via CLI
+          // Usage: /1m (toggle), /1m on, /1m off
+          const arg = args[0]?.toLowerCase();
+          const baseModel = (process.env.CLAUDIA_MODEL || "").trim().replace(/\[1m\]$/i, "") || "opus";
+          if (arg === "on") extended1mEnabled = true;
+          else if (arg === "off") extended1mEnabled = false;
+          else extended1mEnabled = !extended1mEnabled;
+          const newModel = extended1mEnabled ? `${baseModel}[1m]` : baseModel;
+          const newLimit = extended1mEnabled ? "1M" : "200K";
+          debugLog("1M_TOGGLE", { model: newModel, enabled: extended1mEnabled });
+          const modelMsg = JSON.stringify({
+            type: "user",
+            message: { role: "user", content: `/model ${newModel}` },
+            session_id: currentSessionId,
+            parent_tool_use_id: null
+          }) + "\n";
+          if (claude && claude.stdin.writable) {
+            claude.stdin.write(modelMsg);
+          }
+          sendEvent("ready", { sessionId: currentSessionId, model: newModel, tools: 0 });
+          sendEvent("status", { message: `Context window: ${newLimit}` });
+          sendEvent("done", {});
+          return;
+        }
         case "clear":
           // Handle /clear locally by generating a new session ID
           // This makes the CLI treat subsequent messages as a new conversation

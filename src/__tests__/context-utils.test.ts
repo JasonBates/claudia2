@@ -3,28 +3,31 @@ import {
   getContextThreshold,
   formatTokenCount,
   getContextPercentage,
+  getContextLimit,
   DEFAULT_CONTEXT_LIMIT,
+  CONTEXT_LIMIT_1M,
+  CONTEXT_LIMIT_DEFAULT,
 } from '../lib/context-utils';
 
 describe('context-utils', () => {
   describe('getContextThreshold', () => {
     it('returns "ok" when usage is below 75%', () => {
       expect(getContextThreshold(0)).toBe('ok');
-      expect(getContextThreshold(500_000)).toBe('ok'); // 50%
-      expect(getContextThreshold(749_999)).toBe('ok'); // just under 75%
+      expect(getContextThreshold(100_000)).toBe('ok'); // 50%
+      expect(getContextThreshold(149_999)).toBe('ok'); // just under 75%
     });
 
     it('returns "warning" when usage is 75-89%', () => {
-      expect(getContextThreshold(750_000)).toBe('warning'); // exactly 75%
-      expect(getContextThreshold(800_000)).toBe('warning'); // 80%
-      expect(getContextThreshold(899_999)).toBe('warning'); // just under 90%
+      expect(getContextThreshold(150_000)).toBe('warning'); // exactly 75%
+      expect(getContextThreshold(160_000)).toBe('warning'); // 80%
+      expect(getContextThreshold(179_999)).toBe('warning'); // just under 90%
     });
 
     it('returns "critical" when usage is 90% or more', () => {
-      expect(getContextThreshold(900_000)).toBe('critical'); // exactly 90%
-      expect(getContextThreshold(950_000)).toBe('critical'); // 95%
-      expect(getContextThreshold(1_000_000)).toBe('critical'); // 100%
-      expect(getContextThreshold(1_250_000)).toBe('critical'); // over limit
+      expect(getContextThreshold(180_000)).toBe('critical'); // exactly 90%
+      expect(getContextThreshold(190_000)).toBe('critical'); // 95%
+      expect(getContextThreshold(200_000)).toBe('critical'); // 100%
+      expect(getContextThreshold(250_000)).toBe('critical'); // over limit
     });
 
     it('uses custom limit when provided', () => {
@@ -41,7 +44,27 @@ describe('context-utils', () => {
     });
 
     it('uses DEFAULT_CONTEXT_LIMIT correctly', () => {
-      expect(DEFAULT_CONTEXT_LIMIT).toBe(1_000_000);
+      expect(DEFAULT_CONTEXT_LIMIT).toBe(200_000);
+    });
+  });
+
+  describe('getContextLimit', () => {
+    it('returns 1M for models with [1m] suffix', () => {
+      expect(getContextLimit('opus[1m]')).toBe(CONTEXT_LIMIT_1M);
+      expect(getContextLimit('claude-opus-4-6[1m]')).toBe(CONTEXT_LIMIT_1M);
+      expect(getContextLimit('sonnet[1M]')).toBe(CONTEXT_LIMIT_1M);
+    });
+
+    it('returns 200K for standard models', () => {
+      expect(getContextLimit('opus')).toBe(CONTEXT_LIMIT_DEFAULT);
+      expect(getContextLimit('claude-opus-4-6')).toBe(CONTEXT_LIMIT_DEFAULT);
+      expect(getContextLimit('sonnet')).toBe(CONTEXT_LIMIT_DEFAULT);
+    });
+
+    it('returns 200K for undefined/empty model', () => {
+      expect(getContextLimit()).toBe(CONTEXT_LIMIT_DEFAULT);
+      expect(getContextLimit('')).toBe(CONTEXT_LIMIT_DEFAULT);
+      expect(getContextLimit(undefined)).toBe(CONTEXT_LIMIT_DEFAULT);
     });
   });
 
@@ -73,9 +96,9 @@ describe('context-utils', () => {
 
   describe('getContextPercentage', () => {
     it('calculates percentage correctly', () => {
-      expect(getContextPercentage(500_000)).toBe(50);
-      expect(getContextPercentage(1_000_000)).toBe(100);
-      expect(getContextPercentage(250_000)).toBe(25);
+      expect(getContextPercentage(100_000)).toBe(50);
+      expect(getContextPercentage(200_000)).toBe(100);
+      expect(getContextPercentage(50_000)).toBe(25);
     });
 
     it('handles custom limits', () => {
@@ -90,7 +113,7 @@ describe('context-utils', () => {
     });
 
     it('allows values over 100%', () => {
-      expect(getContextPercentage(1_500_000)).toBe(150);
+      expect(getContextPercentage(300_000)).toBe(150);
     });
   });
 });

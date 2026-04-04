@@ -29,6 +29,7 @@ export interface UseSettingsReturn {
   availableFonts: FontOption[];
   saveLocally: Accessor<boolean>;
   sandboxEnabled: Accessor<boolean>;
+  extendedContext: Accessor<boolean>;
 
   // Actions
   openSettings: () => void;
@@ -39,6 +40,7 @@ export interface UseSettingsReturn {
   setColorScheme: (scheme: string | null) => void;
   setSaveLocally: (locally: boolean) => void;
   setSandboxEnabled: (enabled: boolean) => void;
+  setExtendedContext: (enabled: boolean) => void;
   resetToDefaults: () => void;
 }
 
@@ -74,6 +76,7 @@ export function useSettings(): UseSettingsReturn {
   >([]);
   const [saveLocally, setSaveLocallySignal] = createSignal(false);
   const [sandboxEnabled, setSandboxEnabledSignal] = createSignal(true);
+  const [extendedContext, setExtendedContextSignal] = createSignal(false);
 
   // Load settings on mount
   onMount(async () => {
@@ -85,6 +88,7 @@ export function useSettings(): UseSettingsReturn {
       setFontSizeSignal(config.font_size ?? DEFAULT_FONT_SIZE);
       setColorSchemeSignal(config.color_scheme ?? DEFAULT_SCHEME);
       setSandboxEnabledSignal(config.sandbox_enabled ?? true);
+      setExtendedContextSignal(config.extended_context ?? false);
 
       // Check if we're using a local config
       const isLocal = await hasLocalConfig();
@@ -133,6 +137,7 @@ export function useSettings(): UseSettingsReturn {
           font_size: fontSize(),
           color_scheme: colorScheme() ?? undefined,
           sandbox_enabled: sandboxEnabled(),
+          extended_context: extendedContext(),
         },
         saveLocally()
       );
@@ -175,6 +180,11 @@ export function useSettings(): UseSettingsReturn {
     persistSettings();
   };
 
+  const setExtendedContext = (enabled: boolean) => {
+    setExtendedContextSignal(enabled);
+    persistSettings();
+  };
+
   const resetToDefaults = async () => {
     setContentMarginSignal(DEFAULT_MARGIN);
     setFontFamilySignal(DEFAULT_FONT);
@@ -194,6 +204,7 @@ export function useSettings(): UseSettingsReturn {
     availableFonts: CURATED_FONTS,
     saveLocally,
     sandboxEnabled,
+    extendedContext,
     openSettings: () => setIsOpen(true),
     closeSettings: () => setIsOpen(false),
     setContentMargin,
@@ -202,6 +213,7 @@ export function useSettings(): UseSettingsReturn {
     setColorScheme,
     setSaveLocally,
     setSandboxEnabled,
+    setExtendedContext,
     resetToDefaults,
   };
 }

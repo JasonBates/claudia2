@@ -4,7 +4,17 @@
 
 export type ContextThreshold = 'critical' | 'warning' | 'ok';
 
-export const DEFAULT_CONTEXT_LIMIT = 1_000_000;
+export const CONTEXT_LIMIT_1M = 1_000_000;
+export const CONTEXT_LIMIT_DEFAULT = 200_000;
+export const DEFAULT_CONTEXT_LIMIT = CONTEXT_LIMIT_DEFAULT;
+
+/**
+ * Returns the effective context limit based on whether the model has [1m] enabled
+ */
+export function getContextLimit(model?: string): number {
+  if (model && /\[1m\]/i.test(model)) return CONTEXT_LIMIT_1M;
+  return CONTEXT_LIMIT_DEFAULT;
+}
 
 /**
  * Calculates the context threshold level based on token usage

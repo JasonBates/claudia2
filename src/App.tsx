@@ -16,7 +16,7 @@ import ErrorFallback from "./components/ErrorFallback";
 import { sendMessage, resumeSession, getSessionHistory, clearSession, sendPermissionResponse, sendQuestionResponse, sendQuestionCancel, getSchemeColors, openInNewWindow, openNewWindowWithPicker, getConfig, saveConfig, checkForUpdate, downloadAndInstallUpdate, restartApp, getAppVersion, hasBotApiKey, listProjects, reopenInDirectory, getLaunchDir, hasCliDirectory, getPendingResume, checkClaudeCodeInstalled } from "./lib/tauri";
 import type { ProjectInfo } from "./lib/tauri";
 import type { ThemeSettings } from "./lib/theme-utils";
-import { getContextThreshold, DEFAULT_CONTEXT_LIMIT } from "./lib/context-utils";
+import { getContextThreshold, getContextLimit } from "./lib/context-utils";
 import { Mode, getNextMode, isValidMode } from "./lib/mode-utils";
 import { useStore, createEventDispatcher, actions, resetStreamingRefs } from "./lib/store";
 import { normalizeClaudeEvent } from "./lib/claude-event-normalizer";
@@ -43,7 +43,7 @@ function App() {
   // Constants and Refs
   // ============================================================================
 
-  const CONTEXT_LIMIT = DEFAULT_CONTEXT_LIMIT;
+  const contextLimit = () => getContextLimit(store.sessionInfo().model);
 
   // Capture SolidJS owner for restoring reactive context in async callbacks
   const owner = getOwner();
@@ -378,7 +378,7 @@ function App() {
   // Compute context threshold level
   const contextThreshold = () => {
     const used = store.sessionInfo().totalContext || 0;
-    return getContextThreshold(used, CONTEXT_LIMIT);
+    return getContextThreshold(used, contextLimit());
   };
 
   const hasPendingBackgroundResults = () => {
@@ -1501,8 +1501,8 @@ function App() {
           >
             <span class="warning-icon">⚠</span>
             <span class="warning-text">
-              {contextThreshold() === "critical" && "Context 75%+ — click to compact"}
-              {contextThreshold() === "warning" && "Context 60%+ — click to compact"}
+              {contextThreshold() === "critical" && "Context 90%+ — click to compact"}
+              {contextThreshold() === "warning" && "Context 75%+ — click to compact"}
             </span>
           </div>
         </Show>
@@ -1605,12 +1605,14 @@ function App() {
           availableFonts={settings.availableFonts}
           saveLocally={settings.saveLocally()}
           sandboxEnabled={settings.sandboxEnabled()}
+          extendedContext={settings.extendedContext()}
           onMarginChange={settings.setContentMargin}
           onFontChange={settings.setFontFamily}
           onFontSizeChange={settings.setFontSize}
           onColorSchemeChange={settings.setColorScheme}
           onSaveLocallyChange={settings.setSaveLocally}
           onSandboxEnabledChange={settings.setSandboxEnabled}
+          onExtendedContextChange={settings.setExtendedContext}
           onResetDefaults={settings.resetToDefaults}
           onClose={settings.closeSettings}
           currentVersion={appVersion()}
