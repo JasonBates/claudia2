@@ -162,23 +162,57 @@ pub struct ProcessHandle {
 }
 
 impl ProcessHandle {
-    /// Gracefully shutdown the process
+    /// Gracefully shutdown the process.
+    ///
+    /// Sends SIGTERM first to let Claude Code run its stop hooks (e.g. Mem0
+    /// session save), then waits up to 5 seconds before falling back to SIGKILL.
     pub fn shutdown(&mut self) {
         rust_debug_log("HANDLE", "Beginning process shutdown");
 
-        // Kill the child process - this closes stdout which causes reader to exit
-        if let Err(e) = self.child.kill() {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                rust_debug_log("HANDLE", &format!("Kill error (may be ok): {}", e));
-            }
-        } else {
-            rust_debug_log("HANDLE", "Child process killed");
+        let pid = self.child.id();
+
+        // Step 1: Send SIGTERM for graceful shutdown (allows stop hooks to run)
+        #[cfg(unix)]
+        {
+            rust_debug_log("HANDLE", &format!("Sending SIGTERM to pid {}", pid));
+            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
         }
 
-        // Wait for child to fully terminate
-        match self.child.wait() {
-            Ok(status) => rust_debug_log("HANDLE", &format!("Child exited: {:?}", status)),
-            Err(e) => rust_debug_log("HANDLE", &format!("Wait error: {}", e)),
+        // Step 2: Wait up to 5 seconds for graceful exit
+        let graceful = {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                match self.child.try_wait() {
+                    Ok(Some(status)) => {
+                        rust_debug_log("HANDLE", &format!("Child exited gracefully: {:?}", status));
+                        break true;
+                    }
+                    Ok(None) => {
+                        if std::time::Instant::now() >= deadline {
+                            break false;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    Err(e) => {
+                        rust_debug_log("HANDLE", &format!("try_wait error: {}", e));
+                        break false;
+                    }
+                }
+            }
+        };
+
+        // Step 3: Force kill if graceful shutdown didn't work
+        if !graceful {
+            rust_debug_log("HANDLE", "Graceful shutdown timed out, sending SIGKILL");
+            if let Err(e) = self.child.kill() {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    rust_debug_log("HANDLE", &format!("Kill error (may be ok): {}", e));
+                }
+            }
+            match self.child.wait() {
+                Ok(status) => rust_debug_log("HANDLE", &format!("Child exited after SIGKILL: {:?}", status)),
+                Err(e) => rust_debug_log("HANDLE", &format!("Wait error: {}", e)),
+            }
         }
 
         // Join the reader thread
