@@ -132,7 +132,7 @@ jobs:
         run: |
           DMG_PATH=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
           DMG_DIR=$(dirname "$DMG_PATH")
-          cp "$DMG_PATH" "$DMG_DIR/Claudia_universal.dmg"
+          cp "$DMG_PATH" "$DMG_DIR/Claudia2_universal.dmg"
 
       - name: Generate update manifest
         run: node scripts/generate-update-manifest.js

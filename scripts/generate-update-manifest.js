@@ -73,7 +73,7 @@ if (!signature) {
 }
 
 // Generate the manifest
-const downloadUrl = `https://github.com/JasonBates/claudia/releases/download/v${version}/${tarballName}`;
+const downloadUrl = `https://github.com/JasonBates/claudia2/releases/download/v${version}/${tarballName}`;
 const manifest = {
   version,
   notes: `Release v${version}`,
