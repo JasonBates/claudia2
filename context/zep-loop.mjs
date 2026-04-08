@@ -27,8 +27,8 @@ export class ZepLoop {
    * Warms the user graph and creates a thread.
    *
    * @param {string} sessionId - Claudia session ID (used as thread ID)
-   * @param {string} [sessionType] - Session type maps to template: "general", "book-work", "coaching"
-   * @returns {Promise<string|null>} Initial context block (may be null on first turn)
+   * @param {string} [sessionType] - Session type: "general", "book-work", "coaching"
+   * @returns {Promise<void>}
    */
   async start(sessionId, sessionType = "general") {
     this.threadId = `claudia-${sessionId}`;
@@ -52,38 +52,29 @@ export class ZepLoop {
       });
 
       this._ready = true;
-      return null; // No context on first turn (nothing to retrieve yet)
     } catch (err) {
       // Thread might already exist (session resume) — that's fine
       if (err.statusCode === 409 || err.message?.includes("already exists")) {
         this._ready = true;
-        // Try to get existing context
-        return await this._getContext();
+        return;
       }
       console.error("[ZepLoop] Failed to start:", err.message);
       this._ready = false;
-      return null;
     }
   }
 
   /**
-   * Ingest a user message and retrieve updated context in one call.
-   * This is the main per-turn hook — called before the message reaches Claude.
+   * Ingest a user message and retrieve context in a single API call.
+   * This is the Zep-recommended pattern: addMessages with returnContext.
    *
    * @param {string} message - User message text
-   * @param {string} [templateId] - Override the default template for this retrieval
    * @returns {Promise<string|null>} Context block for system prompt injection
    */
-  /**
-   * Ingest a user message to Zep. Fire-and-forget — doesn't retrieve context.
-   *
-   * @param {string} message - User message text
-   */
-  async ingestUserMessage(message) {
-    if (!this._ready || !this.threadId) return;
+  async ingestAndRetrieve(message) {
+    if (!this._ready || !this.threadId) return null;
 
     try {
-      await this.client.thread.addMessages(this.threadId, {
+      const response = await this.client.thread.addMessages(this.threadId, {
         messages: [
           {
             content: message.slice(0, MAX_CONTENT_LENGTH),
@@ -91,22 +82,14 @@ export class ZepLoop {
             name: "Jason",
           },
         ],
+        returnContext: true,
       });
       this.episodeCount++;
+      return response.context || null;
     } catch (err) {
-      console.error("[ZepLoop] ingestUserMessage failed:", err.message);
+      console.error("[ZepLoop] ingestAndRetrieve failed:", err.message);
+      return null;
     }
-  }
-
-  /**
-   * Get context from the thread using getUserContext (template-based).
-   * Public wrapper around _getContext for use by ContextEngine.
-   *
-   * @param {string} [templateId] - Override the default template
-   * @returns {Promise<string|null>} Context block
-   */
-  async getContext(templateId) {
-    return this._getContext(templateId);
   }
 
   /**
@@ -191,23 +174,6 @@ export class ZepLoop {
       this.episodeCount++;
     } catch (err) {
       console.error("[ZepLoop] store failed:", err.message);
-    }
-  }
-
-  /**
-   * Get context from the thread using getUserContext (template-based).
-   * @private
-   */
-  async _getContext(templateId) {
-    try {
-      const template = templateId || this.defaultTemplate;
-      const response = await this.client.thread.getUserContext(this.threadId, {
-        templateId: template,
-      });
-      return response.context || null;
-    } catch (err) {
-      console.error("[ZepLoop] _getContext failed:", err.message);
-      return null;
     }
   }
 

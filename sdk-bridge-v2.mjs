@@ -2456,8 +2456,7 @@ async function main() {
     if (!isSlash && !isMultimodal && contextEngine.isActive()) {
       try {
         const startMs = Date.now();
-        // onUserMessage returns cached context (near-zero latency).
-        // Ingestion + prefetch for next turn happen in background.
+        // Single Zep API call: ingest message + retrieve relevant context (~300ms)
         contextBlock = await contextEngine.onUserMessage(content);
         const latencyMs = Date.now() - startMs;
         console.error(`[BRIDGE] Context: ${contextBlock ? contextBlock.length + ' chars' : 'none (first turn)'} in ${latencyMs}ms`);
