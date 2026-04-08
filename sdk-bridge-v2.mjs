@@ -2456,10 +2456,11 @@ async function main() {
     if (!isSlash && !isMultimodal && contextEngine.isActive()) {
       try {
         const startMs = Date.now();
-        console.error(`[BRIDGE] Retrieving Zep context for: "${content.slice(0, 50)}..."`);
+        // onUserMessage returns cached context (near-zero latency).
+        // Ingestion + prefetch for next turn happen in background.
         contextBlock = await contextEngine.onUserMessage(content);
         const latencyMs = Date.now() - startMs;
-        console.error(`[BRIDGE] Context retrieved: ${contextBlock ? contextBlock.length + ' chars' : 'null'} in ${latencyMs}ms`);
+        console.error(`[BRIDGE] Context: ${contextBlock ? contextBlock.length + ' chars' : 'none (first turn)'} in ${latencyMs}ms`);
         debugLog("CONTEXT_RETRIEVED", {
           hasContext: !!contextBlock,
           lengthChars: contextBlock?.length || 0,
@@ -2468,10 +2469,7 @@ async function main() {
       } catch (err) {
         console.error(`[BRIDGE] Context error: ${err.message}`);
         debugLog("CONTEXT_ERROR", err.message);
-        // Continue without context — graceful degradation
       }
-    } else {
-      console.error(`[BRIDGE] Skipping context: slash=${isSlash} multimodal=${isMultimodal} active=${contextEngine.isActive()}`);
     }
 
     let messageContent;

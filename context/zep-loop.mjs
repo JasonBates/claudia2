@@ -74,33 +74,39 @@ export class ZepLoop {
    * @param {string} [templateId] - Override the default template for this retrieval
    * @returns {Promise<string|null>} Context block for system prompt injection
    */
-  async ingestAndRetrieve(message, templateId) {
-    if (!this._ready || !this.threadId) return null;
+  /**
+   * Ingest a user message to Zep. Fire-and-forget — doesn't retrieve context.
+   *
+   * @param {string} message - User message text
+   */
+  async ingestUserMessage(message) {
+    if (!this._ready || !this.threadId) return;
 
     try {
-      // Step 1: Ingest the message (no returnContext — it ignores templates)
-      // Step 2: Get template-shaped context via getUserContext
-      // These run in parallel — ingestion doesn't need to complete before retrieval
-      // since getUserContext uses the graph (not just this thread's messages)
-      const [, context] = await Promise.all([
-        this.client.thread.addMessages(this.threadId, {
-          messages: [
-            {
-              content: message.slice(0, MAX_CONTENT_LENGTH),
-              role: "user",
-              name: "Jason",
-            },
-          ],
-        }),
-        this._getContext(templateId),
-      ]);
-
+      await this.client.thread.addMessages(this.threadId, {
+        messages: [
+          {
+            content: message.slice(0, MAX_CONTENT_LENGTH),
+            role: "user",
+            name: "Jason",
+          },
+        ],
+      });
       this.episodeCount++;
-      return context;
     } catch (err) {
-      console.error("[ZepLoop] ingestAndRetrieve failed:", err.message);
-      return null;
+      console.error("[ZepLoop] ingestUserMessage failed:", err.message);
     }
+  }
+
+  /**
+   * Get context from the thread using getUserContext (template-based).
+   * Public wrapper around _getContext for use by ContextEngine.
+   *
+   * @param {string} [templateId] - Override the default template
+   * @returns {Promise<string|null>} Context block
+   */
+  async getContext(templateId) {
+    return this._getContext(templateId);
   }
 
   /**

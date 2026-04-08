@@ -20,7 +20,9 @@ export class ContextEngine {
     this.zepLoop = null;
     this.active = config.defaultActive !== false;
     this._lastContext = null;
+    this._cachedContextBlock = null; // Pre-fetched context for next turn
     this._sessionStartPromise = null; // Tracks in-flight session start
+    this._prefetchPromise = null; // Tracks in-flight prefetch
 
     // Initialize Zep if configured
     if (config.zep?.apiKey) {
@@ -51,22 +53,26 @@ export class ContextEngine {
    * @returns {Promise<string|null>} Initial context block (if any)
    */
   async onSessionStart(sessionId, sessionType = "general") {
-    let zepContext = null;
+    if (!this.active || !this.zepLoop) return null;
 
-    if (this.active && this.zepLoop) {
-      // Store the promise so onUserMessage can await it if called before start completes
-      this._sessionStartPromise = this.zepLoop.start(sessionId, sessionType);
-      zepContext = await this._sessionStartPromise;
-      this._sessionStartPromise = null;
-    }
+    // Start session and prefetch initial context in background.
+    // Don't block — first turn uses cached context (null initially, that's fine).
+    this._sessionStartPromise = this.zepLoop.start(sessionId, sessionType)
+      .then(() => {
+        // Session ready — prefetch context so turn 1 has something
+        this._prefetch();
+      })
+      .catch((err) => {
+        console.error("[ContextEngine] Session start failed:", err.message);
+      });
 
-    this._lastContext = zepContext;
-    return this._formatContextBlock(zepContext);
+    return null;
   }
 
   /**
    * Called before a user message is sent to Claude.
-   * Ingests to Zep and retrieves updated context.
+   * Returns cached context immediately (zero latency), then kicks off
+   * ingestion + prefetch for the next turn in the background.
    *
    * @param {string} message - User message text
    * @param {string} [templateId] - Override template for this turn
@@ -77,28 +83,71 @@ export class ContextEngine {
       return null;
     }
 
-    // Wait for session start if it's still in flight
+    // If session start is still in flight, wait for it (only affects turn 1)
     if (this._sessionStartPromise) {
       await this._sessionStartPromise;
+      this._sessionStartPromise = null;
     }
 
-    const zepContext = await this.zepLoop.ingestAndRetrieve(message, templateId);
-    this._lastContext = zepContext;
-    return this._formatContextBlock(zepContext);
+    // If a prefetch is in flight, await it to get the latest
+    if (this._prefetchPromise) {
+      await this._prefetchPromise;
+      this._prefetchPromise = null;
+    }
+
+    // Grab the cached context (from previous prefetch)
+    const contextBlock = this._cachedContextBlock;
+
+    // Fire-and-forget: ingest this message + prefetch updated context for next turn
+    this._ingestAndPrefetch(message, templateId);
+
+    return contextBlock;
   }
 
   /**
    * Called after Claude responds. Fire-and-forget — don't block the UI.
+   * Ingests assistant message and prefetches updated context.
    *
    * @param {string} message - Assistant response text
    */
   onAssistantMessage(message) {
     if (!this.active || !this.zepLoop) return;
 
-    // Fire and forget — don't await
-    this.zepLoop.ingestAssistant(message).catch((err) => {
-      console.error("[ContextEngine] Failed to ingest assistant message:", err.message);
+    // Fire and forget — ingest then prefetch
+    this.zepLoop.ingestAssistant(message)
+      .then(() => this._prefetch())
+      .catch((err) => {
+        console.error("[ContextEngine] Failed to ingest assistant message:", err.message);
+      });
+  }
+
+  /**
+   * Ingest user message and prefetch context for next turn. Background.
+   * @private
+   */
+  _ingestAndPrefetch(message, templateId) {
+    // Ingest the user message (fire-and-forget)
+    this.zepLoop.ingestUserMessage(message).catch((err) => {
+      console.error("[ContextEngine] Ingest failed:", err.message);
     });
+
+    // Prefetch updated context for the next turn
+    this._prefetch(templateId);
+  }
+
+  /**
+   * Prefetch context from Zep and cache it. Background, non-blocking.
+   * @private
+   */
+  _prefetch(templateId) {
+    this._prefetchPromise = this.zepLoop.getContext(templateId)
+      .then((ctx) => {
+        this._cachedContextBlock = this._formatContextBlock(ctx);
+        this._lastContext = ctx;
+      })
+      .catch((err) => {
+        console.error("[ContextEngine] Prefetch failed:", err.message);
+      });
   }
 
   /**
