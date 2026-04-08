@@ -7,7 +7,12 @@
  * This is Layer 1 — automatic, toggle-controlled, invisible to the user.
  */
 
-import { ZepClient } from "@getzep/zep-cloud";
+// ESM import resolution walks up from the file's directory, which fails in
+// production bundles where node_modules isn't adjacent. Use createRequire
+// with NODE_PATH (set by Rust) so CJS resolution can find the package.
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const { ZepClient } = require("@getzep/zep-cloud");
 
 const MAX_CONTENT_LENGTH = 4096;
 
@@ -36,11 +41,9 @@ export class ZepLoop {
     this.episodeCount = 0;
 
     try {
-      // Warm the user graph (preloads for faster first retrieval)
-      await this.client.user.warm(this.userId);
-
-      // Create the thread
-      await this.client.thread.create({
+      // Warm and create in parallel — they're independent calls
+      const warmPromise = this.client.user.warm(this.userId);
+      const createPromise = this.client.thread.create({
         threadId: this.threadId,
         userId: this.userId,
         metadata: {
@@ -51,6 +54,7 @@ export class ZepLoop {
         },
       });
 
+      await Promise.all([warmPromise, createPromise]);
       this._ready = true;
     } catch (err) {
       // Thread might already exist (session resume) — that's fine

@@ -321,7 +321,33 @@ pub fn spawn_claude_process_with_resume(
         .arg(&bridge_path)
         .current_dir(working_dir)
         .env("NODE_OPTIONS", "--no-warnings")
-        .env("FORCE_COLOR", "0")
+        .env("FORCE_COLOR", "0");
+
+    // Set NODE_PATH so the bridge can resolve npm dependencies (e.g. @getzep/zep-cloud).
+    // In dev mode, node_modules is in the project root (bridge parent dir).
+    // In production, we also check the compile-time project root as a fallback.
+    if let Some(bridge_dir) = bridge_path.parent() {
+        let dev_modules = bridge_dir.join("node_modules");
+        let compile_time_modules = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|p| p.join("node_modules"))
+            .unwrap_or_default();
+
+        let node_path_val = if dev_modules.exists() {
+            dev_modules.to_string_lossy().to_string()
+        } else if compile_time_modules.exists() {
+            compile_time_modules.to_string_lossy().to_string()
+        } else {
+            String::new()
+        };
+
+        if !node_path_val.is_empty() {
+            rust_debug_log("SPAWN", &format!("NODE_PATH={}", node_path_val));
+            cmd.env("NODE_PATH", &node_path_val);
+        }
+    }
+
+    cmd
         .env_remove("CLAUDECODE") // Strip parent Claude Code env so bridge doesn't refuse as "nested session"
         .env("CLAUDIA_SESSION_ID", app_session_id)
         .env(

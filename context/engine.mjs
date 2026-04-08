@@ -10,6 +10,8 @@
 
 import { ZepLoop } from "./zep-loop.mjs";
 
+const CONTEXT_TIMEOUT_MS = 800; // Skip context rather than block longer than this
+
 export class ContextEngine {
   /**
    * @param {object} config
@@ -79,10 +81,24 @@ export class ContextEngine {
       this._sessionStartPromise = null;
     }
 
-    // Single API call: ingest message + get context shaped by it
-    const ctx = await this.zepLoop.ingestAndRetrieve(message);
-    this._lastContext = ctx;
-    return this._formatContextBlock(ctx);
+    // Single API call: ingest message + get context shaped by it.
+    // Timeout: send without context rather than block the conversation.
+    try {
+      const ctx = await Promise.race([
+        this.zepLoop.ingestAndRetrieve(message),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), CONTEXT_TIMEOUT_MS)
+        ),
+      ]);
+      this._lastContext = ctx;
+      return this._formatContextBlock(ctx);
+    } catch (err) {
+      if (err.message === "timeout") {
+        console.error(`[ContextEngine] Context retrieval timed out (${CONTEXT_TIMEOUT_MS}ms), sending without context`);
+        return null;
+      }
+      throw err;
+    }
   }
 
   /**
