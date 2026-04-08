@@ -20,6 +20,7 @@ export class ContextEngine {
     this.zepLoop = null;
     this.active = config.defaultActive !== false;
     this._lastContext = null;
+    this._sessionStartPromise = null; // Tracks in-flight session start
 
     // Initialize Zep if configured
     if (config.zep?.apiKey) {
@@ -53,7 +54,10 @@ export class ContextEngine {
     let zepContext = null;
 
     if (this.active && this.zepLoop) {
-      zepContext = await this.zepLoop.start(sessionId, sessionType);
+      // Store the promise so onUserMessage can await it if called before start completes
+      this._sessionStartPromise = this.zepLoop.start(sessionId, sessionType);
+      zepContext = await this._sessionStartPromise;
+      this._sessionStartPromise = null;
     }
 
     this._lastContext = zepContext;
@@ -71,6 +75,11 @@ export class ContextEngine {
   async onUserMessage(message, templateId) {
     if (!this.active || !this.zepLoop) {
       return null;
+    }
+
+    // Wait for session start if it's still in flight
+    if (this._sessionStartPromise) {
+      await this._sessionStartPromise;
     }
 
     const zepContext = await this.zepLoop.ingestAndRetrieve(message, templateId);

@@ -197,8 +197,9 @@ async function main() {
 
   // --- Context Engine (Zep memory pipeline) ---
   // Initialized from env vars. Set ZEP_API_KEY to enable.
+  const hasZepKey = !!process.env.ZEP_API_KEY;
   const contextEngine = new ContextEngine({
-    zep: process.env.ZEP_API_KEY ? {
+    zep: hasZepKey ? {
       apiKey: process.env.ZEP_API_KEY,
       userId: process.env.ZEP_USER_ID || "jason",
       defaultTemplate: process.env.ZEP_DEFAULT_TEMPLATE || "general",
@@ -206,8 +207,10 @@ async function main() {
     defaultActive: process.env.CLAUDIA_MEMORY !== "0",
   });
   let assistantTextBuffer = ""; // Accumulate assistant response for Zep ingestion
+  // Always log context engine status to stderr (visible in terminal)
+  console.error(`[BRIDGE] ContextEngine: zep=${hasZepKey}, active=${contextEngine.isActive()}`);
   debugLog("CONTEXT_ENGINE", {
-    zepEnabled: !!process.env.ZEP_API_KEY,
+    zepEnabled: hasZepKey,
     active: contextEngine.isActive(),
   });
 
@@ -2453,16 +2456,22 @@ async function main() {
     if (!isSlash && !isMultimodal && contextEngine.isActive()) {
       try {
         const startMs = Date.now();
+        console.error(`[BRIDGE] Retrieving Zep context for: "${content.slice(0, 50)}..."`);
         contextBlock = await contextEngine.onUserMessage(content);
+        const latencyMs = Date.now() - startMs;
+        console.error(`[BRIDGE] Context retrieved: ${contextBlock ? contextBlock.length + ' chars' : 'null'} in ${latencyMs}ms`);
         debugLog("CONTEXT_RETRIEVED", {
           hasContext: !!contextBlock,
           lengthChars: contextBlock?.length || 0,
-          latencyMs: Date.now() - startMs,
+          latencyMs,
         });
       } catch (err) {
+        console.error(`[BRIDGE] Context error: ${err.message}`);
         debugLog("CONTEXT_ERROR", err.message);
         // Continue without context — graceful degradation
       }
+    } else {
+      console.error(`[BRIDGE] Skipping context: slash=${isSlash} multimodal=${isMultimodal} active=${contextEngine.isActive()}`);
     }
 
     let messageContent;
