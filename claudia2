@@ -1,0 +1,11 @@
+#!/bin/bash
+# Claudia2 CLI Launcher
+# Opens Claudia2 app with current directory as working directory
+
+APP="/Applications/Claudia2.app"
+[ ! -d "$APP" ] && APP="$HOME/Applications/Claudia2.app"
+[ ! -d "$APP" ] && { echo "Error: Claudia2.app not found in /Applications or ~/Applications"; exit 1; }
+
+# Pass current directory as argument
+# -n flag allows multiple instances (one per project)
+open -n -a "$APP" --args "$(pwd)"
