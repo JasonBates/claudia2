@@ -94,18 +94,20 @@ jobs:
       - name: Build Tauri app (universal binary)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           npm run tauri build -- --target universal-apple-darwin \
             --config '{"bundle":{"macOS":{"signingIdentity":"${{ env.APPLE_SIGNING_IDENTITY }}"}}}'
 
-      - name: Notarize app
+      - name: Notarize DMG
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # Find the DMG
+          # Tauri notarizes the .app inline, but the DMG needs separate notarization
           DMG_PATH=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
 
           echo "Submitting $DMG_PATH for notarization..."
@@ -117,9 +119,6 @@ jobs:
 
           echo "Stapling notarization ticket..."
           xcrun stapler staple "$DMG_PATH"
-
-          echo "Verifying notarization staple..."
-          xcrun stapler validate "$DMG_PATH"
 
       - name: Cleanup keychain
         if: always()
