@@ -20,6 +20,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.19",
     "@anthropic-ai/claude-code": "^2.1.19",
     "@anthropic-ai/sdk": "^0.71.2",
+    "@getzep/zep-cloud": "^3.18.0",
     "@modelcontextprotocol/sdk": "^1.25.3",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2",

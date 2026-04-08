@@ -45,6 +45,39 @@ pub struct Config {
     // Legacy file-based permission hook polling (disabled by default)
     #[serde(default = "default_legacy_permission_hook_polling")]
     pub legacy_permission_hook_polling: bool,
+    // Memory integration settings (Zep context engine)
+    #[serde(default)]
+    pub memory: Option<MemoryConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    #[serde(default = "default_memory_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_memory_active")]
+    pub default_active: bool,
+    #[serde(default)]
+    pub zep_api_key: Option<String>,
+    #[serde(default = "default_zep_user_id")]
+    pub zep_user_id: String,
+    #[serde(default = "default_zep_template")]
+    pub zep_default_template: String,
+}
+
+fn default_memory_enabled() -> bool {
+    true
+}
+
+fn default_memory_active() -> bool {
+    true
+}
+
+fn default_zep_user_id() -> String {
+    "jason".to_string()
+}
+
+fn default_zep_template() -> String {
+    "general".to_string()
 }
 
 fn default_permission_mode() -> String {

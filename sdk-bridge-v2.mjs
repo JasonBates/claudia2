@@ -19,6 +19,7 @@ import { writeFileSync, existsSync } from "fs";
 import { join, dirname, basename } from "path";
 import { tmpdir, homedir, userInfo } from "os";
 import { fileURLToPath } from "url";
+import { ContextEngine } from "./context/engine.mjs";
 
 // Debug logging control - set CLAUDIA_DEBUG=1 to enable
 const DEBUG_ENABLED = process.env.CLAUDIA_DEBUG === "1";
@@ -193,6 +194,22 @@ async function main() {
     "formulae.brew.sh",
     "*.ghcr.io",
   ];
+
+  // --- Context Engine (Zep memory pipeline) ---
+  // Initialized from env vars. Set ZEP_API_KEY to enable.
+  const contextEngine = new ContextEngine({
+    zep: process.env.ZEP_API_KEY ? {
+      apiKey: process.env.ZEP_API_KEY,
+      userId: process.env.ZEP_USER_ID || "jason",
+      defaultTemplate: process.env.ZEP_DEFAULT_TEMPLATE || "general",
+    } : null,
+    defaultActive: process.env.CLAUDIA_MEMORY !== "0",
+  });
+  let assistantTextBuffer = ""; // Accumulate assistant response for Zep ingestion
+  debugLog("CONTEXT_ENGINE", {
+    zepEnabled: !!process.env.ZEP_API_KEY,
+    active: contextEngine.isActive(),
+  });
 
   // Build Claude args - optionally resume a session
   function buildClaudeArgs(resumeSessionId = null) {
@@ -1651,6 +1668,10 @@ async function main() {
         if (event.delta?.type === "text_delta" && !suppressUiStream) {
           // Stream text chunk to UI
           sendEvent("text_delta", { text: event.delta.text });
+          // Accumulate assistant text for Zep ingestion (capped at 4KB)
+          if (assistantTextBuffer.length < 4096) {
+            assistantTextBuffer += event.delta.text;
+          }
         }
         if (event.delta?.type === "input_json_delta") {
           // Tool input streaming
@@ -1731,6 +1752,12 @@ async function main() {
             activeSubagents: activeSubagents.size,
             reason: "message_stop with end_turn"
           });
+
+          // Ingest assistant response to Zep (fire-and-forget, don't block UI)
+          if (assistantTextBuffer.trim()) {
+            contextEngine.onAssistantMessage(assistantTextBuffer);
+            debugLog("ZEP_ASSISTANT_INGEST", { length: assistantTextBuffer.length });
+          }
         }
         lastStopReason = null;
         break;
@@ -1817,6 +1844,11 @@ async function main() {
               });
               readySent = true;
 
+              // Initialize Zep context engine for this session (fire-and-forget)
+              contextEngine.onSessionStart(msg.session_id).catch(err => {
+                debugLog("CONTEXT_ENGINE_START_ERROR", err.message);
+              });
+
               // Send any pending messages that were queued during respawn
               sendPendingMessages();
             } else if (msg.subtype === "hook_response" && !readySent) {
@@ -1831,6 +1863,11 @@ async function main() {
                   tools: 0        // Tool count not available in hook response
                 });
                 readySent = true;
+
+                // Initialize Zep context engine for resumed session
+                contextEngine.onSessionStart(msg.session_id).catch(err => {
+                  debugLog("CONTEXT_ENGINE_START_ERROR", err.message);
+                });
 
                 // Send any pending messages
                 sendPendingMessages();
@@ -2399,15 +2436,40 @@ async function main() {
 
   // Send a user message to Claude
   // Supports both plain text and JSON-prefixed multimodal messages
-  function sendUserMessage(content) {
+  // Async: retrieves Zep context before sending (adds <300ms when active)
+  async function sendUserMessage(content) {
     // Inject current date/time with each message
     const dateTime = getDateTimePrefix();
+
+    // Reset assistant text buffer for new turn
+    assistantTextBuffer = "";
+
+    // Retrieve Zep context for this turn (only for non-slash, non-multimodal text)
+    // Context retrieval runs in parallel with nothing — it must complete before we send
+    const isSlash = content.trimStart().startsWith("/");
+    const isMultimodal = content.startsWith("__JSON__");
+    let contextBlock = null;
+
+    if (!isSlash && !isMultimodal && contextEngine.isActive()) {
+      try {
+        const startMs = Date.now();
+        contextBlock = await contextEngine.onUserMessage(content);
+        debugLog("CONTEXT_RETRIEVED", {
+          hasContext: !!contextBlock,
+          lengthChars: contextBlock?.length || 0,
+          latencyMs: Date.now() - startMs,
+        });
+      } catch (err) {
+        debugLog("CONTEXT_ERROR", err.message);
+        // Continue without context — graceful degradation
+      }
+    }
 
     let messageContent;
 
     // Check for JSON-prefixed message (multimodal with images)
     // Format: __JSON__{"content":[{type:"image",...},{type:"text",...}]}
-    if (content.startsWith("__JSON__")) {
+    if (isMultimodal) {
       try {
         const jsonData = JSON.parse(content.slice(8)); // Remove "__JSON__" prefix
 
@@ -2434,7 +2496,9 @@ async function main() {
       if (trimmed.startsWith("/")) {
         messageContent = trimmed;
       } else {
-        messageContent = `[${dateTime}] ${content}`;
+        // Prepend context block if available
+        const prefix = contextBlock ? `${contextBlock}\n\n` : "";
+        messageContent = `${prefix}[${dateTime}] ${content}`;
       }
     }
 

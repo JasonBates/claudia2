@@ -8,6 +8,24 @@ use tokio::sync::mpsc;
 use crate::config::Config;
 use crate::events::ClaudeEvent;
 
+/// Read a key=value from the .env file in the given directory.
+fn read_env_key(dir: &Path, key: &str) -> Option<String> {
+    let env_path = dir.join(".env");
+    let contents = std::fs::read_to_string(&env_path).ok()?;
+    let prefix = format!("{}=", key);
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with(&prefix) {
+            let val = line.strip_prefix(&prefix).unwrap_or("");
+            let val = val.trim_matches('"').trim_matches('\'');
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn rust_debug_log(prefix: &str, msg: &str) {
     // Gate debug logging behind CLAUDIA_DEBUG=1 environment variable
     static DEBUG_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -332,6 +350,35 @@ pub fn spawn_claude_process_with_resume(
     if config.sandbox_enabled {
         rust_debug_log("SPAWN", "Sandbox mode enabled");
         cmd.env("CLAUDIA_SANDBOX", "1");
+    }
+
+    // Pass memory config to bridge.
+    // ZEP_API_KEY can come from config.json, .env file, or environment variable (in that order).
+    if let Some(ref memory) = config.memory {
+        if memory.enabled {
+            let zep_key = memory
+                .zep_api_key
+                .clone()
+                .or_else(|| read_env_key(working_dir, "ZEP_API_KEY"))
+                .or_else(|| std::env::var("ZEP_API_KEY").ok());
+            if let Some(api_key) = zep_key {
+                cmd.env("ZEP_API_KEY", api_key);
+            }
+            cmd.env("ZEP_USER_ID", &memory.zep_user_id);
+            cmd.env("ZEP_DEFAULT_TEMPLATE", &memory.zep_default_template);
+            if !memory.default_active {
+                cmd.env("CLAUDIA_MEMORY", "0");
+            }
+        } else {
+            cmd.env("CLAUDIA_MEMORY", "0");
+        }
+    } else {
+        // No memory config section — check .env and environment for ZEP_API_KEY anyway
+        if let Some(api_key) = read_env_key(working_dir, "ZEP_API_KEY")
+            .or_else(|| std::env::var("ZEP_API_KEY").ok())
+        {
+            cmd.env("ZEP_API_KEY", api_key);
+        }
     }
 
     if let Some(session_id) = resume_session_id {
