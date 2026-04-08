@@ -78,26 +78,25 @@ export class ZepLoop {
     if (!this._ready || !this.threadId) return null;
 
     try {
-      const response = await this.client.thread.addMessages(this.threadId, {
-        messages: [
-          {
-            content: message.slice(0, MAX_CONTENT_LENGTH),
-            role: "user",
-            name: "Jason",
-          },
-        ],
-        returnContext: true,
-      });
+      // Step 1: Ingest the message (no returnContext — it ignores templates)
+      // Step 2: Get template-shaped context via getUserContext
+      // These run in parallel — ingestion doesn't need to complete before retrieval
+      // since getUserContext uses the graph (not just this thread's messages)
+      const [, context] = await Promise.all([
+        this.client.thread.addMessages(this.threadId, {
+          messages: [
+            {
+              content: message.slice(0, MAX_CONTENT_LENGTH),
+              role: "user",
+              name: "Jason",
+            },
+          ],
+        }),
+        this._getContext(templateId),
+      ]);
 
       this.episodeCount++;
-
-      // addMessages returns context when returnContext is true
-      if (response.context) {
-        return response.context;
-      }
-
-      // Fallback: get context separately with template
-      return await this._getContext(templateId);
+      return context;
     } catch (err) {
       console.error("[ZepLoop] ingestAndRetrieve failed:", err.message);
       return null;
