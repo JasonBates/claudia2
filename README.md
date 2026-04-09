@@ -179,6 +179,20 @@ Claudia includes 6 bundled color schemes (Solarized Dark/Light, Dracula, Nord, O
 
 Note: iTerm2 does not need to be installed. Claudia reads the `.itermcolors` plist format directly.
 
+### Zep Memory
+
+Claudia2 integrates [Zep](https://www.getzep.com/) for long-term conversational memory. Zep ingests each conversation turn and retrieves relevant context from prior sessions automatically.
+
+**Setup:**
+
+1. Create a free Zep account and get an API key
+2. Add `ZEP_API_KEY` to `~/.env`:
+   ```
+   ZEP_API_KEY=your-key-here
+   ```
+
+The key is loaded from `~/.env` regardless of which project directory you launch from. You can also set it per-project by placing a `.env` file in that project's directory (takes precedence over `~/.env`).
+
 ### Advanced Runtime Config
 
 You can override model and runtime binaries in `~/.config/claudia/config.json` (or per-project at `.claudia/config.json`):

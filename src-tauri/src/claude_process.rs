@@ -323,30 +323,6 @@ pub fn spawn_claude_process_with_resume(
         .env("NODE_OPTIONS", "--no-warnings")
         .env("FORCE_COLOR", "0");
 
-    // Set NODE_PATH so the bridge can resolve npm dependencies (e.g. @getzep/zep-cloud).
-    // In dev mode, node_modules is in the project root (bridge parent dir).
-    // In production, we also check the compile-time project root as a fallback.
-    if let Some(bridge_dir) = bridge_path.parent() {
-        let dev_modules = bridge_dir.join("node_modules");
-        let compile_time_modules = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .map(|p| p.join("node_modules"))
-            .unwrap_or_default();
-
-        let node_path_val = if dev_modules.exists() {
-            dev_modules.to_string_lossy().to_string()
-        } else if compile_time_modules.exists() {
-            compile_time_modules.to_string_lossy().to_string()
-        } else {
-            String::new()
-        };
-
-        if !node_path_val.is_empty() {
-            rust_debug_log("SPAWN", &format!("NODE_PATH={}", node_path_val));
-            cmd.env("NODE_PATH", &node_path_val);
-        }
-    }
-
     cmd
         .env_remove("CLAUDECODE") // Strip parent Claude Code env so bridge doesn't refuse as "nested session"
         .env("CLAUDIA_SESSION_ID", app_session_id)
@@ -379,13 +355,16 @@ pub fn spawn_claude_process_with_resume(
     }
 
     // Pass memory config to bridge.
-    // ZEP_API_KEY can come from config.json, .env file, or environment variable (in that order).
+    let home_dir = dirs::home_dir();
+
+    // ZEP_API_KEY can come from config.json, .env file (launch dir or home), or environment variable.
     if let Some(ref memory) = config.memory {
         if memory.enabled {
             let zep_key = memory
                 .zep_api_key
                 .clone()
                 .or_else(|| read_env_key(working_dir, "ZEP_API_KEY"))
+                .or_else(|| home_dir.as_deref().and_then(|h| read_env_key(h, "ZEP_API_KEY")))
                 .or_else(|| std::env::var("ZEP_API_KEY").ok());
             if let Some(api_key) = zep_key {
                 cmd.env("ZEP_API_KEY", api_key);
@@ -401,6 +380,7 @@ pub fn spawn_claude_process_with_resume(
     } else {
         // No memory config section — check .env and environment for ZEP_API_KEY anyway
         if let Some(api_key) = read_env_key(working_dir, "ZEP_API_KEY")
+            .or_else(|| home_dir.as_deref().and_then(|h| read_env_key(h, "ZEP_API_KEY")))
             .or_else(|| std::env::var("ZEP_API_KEY").ok())
         {
             cmd.env("ZEP_API_KEY", api_key);
