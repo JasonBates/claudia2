@@ -1,14 +1,12 @@
-# Claudia
+# Claudia2
 
 [![Download for macOS](https://img.shields.io/badge/Download-Latest-black?logo=apple)](https://github.com/JasonBates/claudia2/releases/latest/download/Claudia2_universal.dmg)
 [![Test](https://github.com/JasonBates/claudia2/actions/workflows/test.yml/badge.svg)](https://github.com/JasonBates/claudia2/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Claude Code, but pretty
+> **This is a personal custom build of [Claudia](https://github.com/JasonBates/claudia).** It adds Zep long-term memory, Obsidian vault integration, and other experimental features tailored to my workflow. If you're looking for a stable, general-purpose build, use [Claudia](https://github.com/JasonBates/claudia) instead.
 
-Claude Code is powerful. The terminal is not where you want to live. Claudia wraps the CLI in a native macOS app so you keep everything—MCPs, CLAUDE.md files, hooks, session persistence—and gain a visual interface that doesn't hurt to look at.
-
-> *Why rebuild the agent runtime when you can wrap it?*
+Claude Code, but pretty — with memory.
 
 <p align="center">
   <a href="https://github.com/JasonBates/claudia2/releases/latest/download/Claudia2_universal.dmg">
