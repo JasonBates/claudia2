@@ -1,7 +1,7 @@
 # Claudia
 
-[![Download for macOS](https://img.shields.io/badge/Download-v0.4.5-black?logo=apple)](https://github.com/JasonBates/claudia/releases/download/v0.4.5/Claudia_0.4.5_universal.dmg)
-[![Test](https://github.com/JasonBates/claudia/actions/workflows/test.yml/badge.svg)](https://github.com/JasonBates/claudia/actions/workflows/test.yml)
+[![Download for macOS](https://img.shields.io/badge/Download-Latest-black?logo=apple)](https://github.com/JasonBates/claudia2/releases/latest/download/Claudia2_universal.dmg)
+[![Test](https://github.com/JasonBates/claudia2/actions/workflows/test.yml/badge.svg)](https://github.com/JasonBates/claudia2/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Claude Code, but pretty
@@ -11,8 +11,8 @@ Claude Code is powerful. The terminal is not where you want to live. Claudia wra
 > *Why rebuild the agent runtime when you can wrap it?*
 
 <p align="center">
-  <a href="https://github.com/JasonBates/claudia/releases/latest/download/Claudia_universal.dmg">
-    <img src="https://img.shields.io/badge/⬇_Download_Claudia_for_macOS-black?style=for-the-badge&logo=apple&logoColor=white" alt="Download Claudia" height="80" />
+  <a href="https://github.com/JasonBates/claudia2/releases/latest/download/Claudia2_universal.dmg">
+    <img src="https://img.shields.io/badge/⬇_Download_Claudia2_for_macOS-black?style=for-the-badge&logo=apple&logoColor=white" alt="Download Claudia2" height="80" />
   </a>
 </p>
 <p align="center"><em>Requires macOS 12+ and <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code CLI</a> installed</em></p>
@@ -79,7 +79,7 @@ Cowork wraps a sandboxed environment. Claudia wraps Claude Code itself—so you 
 
 Download the latest release and drag Claudia.app to your Applications folder:
 
-**[⬇ Download Claudia for macOS](https://github.com/JasonBates/claudia/releases/latest/download/Claudia_universal.dmg)**
+**[⬇ Download Claudia2 for macOS](https://github.com/JasonBates/claudia2/releases/latest/download/Claudia2_universal.dmg)**
 
 Requires macOS 12+ and [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed.
 
