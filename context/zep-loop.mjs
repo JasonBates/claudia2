@@ -7,12 +7,9 @@
  * This is Layer 1 — automatic, toggle-controlled, invisible to the user.
  */
 
-// ESM import resolution walks up from the file's directory, which fails in
-// production bundles where node_modules isn't adjacent. Use createRequire
-// with NODE_PATH (set by Rust) so CJS resolution can find the package.
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-const { ZepClient } = require("@getzep/zep-cloud");
+// In dev, Node resolves this from node_modules. In production builds,
+// esbuild inlines the dependency (see bundle:bridge script in package.json).
+import { ZepClient } from "@getzep/zep-cloud";
 
 const MAX_CONTENT_LENGTH = 4096;
 

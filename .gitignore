@@ -3,6 +3,7 @@ node_modules/
 
 # Build outputs
 dist/
+context/zep-loop.bundle.mjs
 target/
 *.log
 
