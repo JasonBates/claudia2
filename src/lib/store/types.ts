@@ -197,6 +197,12 @@ export interface ConversationState {
     pendingPreTokens: number | null;
   };
 
+  // === Memory ===
+  memory: {
+    /** Whether memory pipeline (Zep) is active */
+    active: boolean;
+  };
+
   // === Update ===
   update: {
     /** Available update info */
@@ -264,6 +270,9 @@ export function createInitialState(): ConversationState {
       warningDismissed: false,
       pendingUpdateMessageId: null,
       pendingPreTokens: null,
+    },
+    memory: {
+      active: true,
     },
     update: {
       available: null,

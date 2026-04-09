@@ -90,6 +90,7 @@ pub fn run() {
             commands::session::start_session,
             commands::session::stop_session,
             commands::session::send_interrupt,
+            commands::session::set_memory_active,
             commands::session::is_session_active,
             commands::session::get_launch_dir,
             commands::session::is_sandbox_enabled,
