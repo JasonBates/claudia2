@@ -104,6 +104,10 @@ export interface StoreContextValue {
   /** Warning dismissed state */
   warningDismissed: () => boolean;
 
+  // === Memory State ===
+  /** Whether memory pipeline is active */
+  memoryActive: () => boolean;
+
   // === Update State ===
   /** Available update info */
   updateAvailable: () => UpdateInfo | null;
@@ -440,6 +444,9 @@ export const StoreProvider: ParentComponent = (props) => {
     lastCompactionPreTokens: () => state.compaction.preTokens,
     compactionMessageId: () => state.compaction.messageId,
     warningDismissed: () => state.compaction.warningDismissed,
+
+    // Memory accessors
+    memoryActive: () => state.memory.active,
 
     // Update accessors
     updateAvailable: () => state.update.available,

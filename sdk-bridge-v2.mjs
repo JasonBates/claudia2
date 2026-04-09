@@ -2597,6 +2597,15 @@ async function main() {
           return;
         }
 
+        // Handle memory toggle from UI
+        if (parsed.type === "memory_toggle") {
+          const active = !!parsed.active;
+          contextEngine.setActive(active);
+          console.error(`[BRIDGE] Memory toggled: ${active}`);
+          debugLog("MEMORY_TOGGLE", { active });
+          return;
+        }
+
         // Handle permission response (control_response)
         if (parsed.type === "control_response") {
           debugLog("CONTROL_RESPONSE_FROM_UI", parsed);

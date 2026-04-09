@@ -805,6 +805,21 @@ export function conversationReducer(
         },
       };
 
+    // =========================================================================
+    // Memory Actions
+    // =========================================================================
+    case "TOGGLE_MEMORY":
+      return {
+        ...state,
+        memory: { ...state.memory, active: !state.memory.active },
+      };
+
+    case "SET_MEMORY_ACTIVE":
+      return {
+        ...state,
+        memory: { ...state.memory, active: action.payload },
+      };
+
     default:
       return state;
   }

@@ -199,6 +199,11 @@ export async function sendInterrupt(): Promise<void> {
   await invoke("send_interrupt");
 }
 
+export async function setMemoryActive(active: boolean): Promise<void> {
+  console.log(`[TAURI] Setting memory active: ${active}`);
+  await invoke("set_memory_active", { active });
+}
+
 /**
  * Clear the session by restarting the Claude process.
  * This is the only way to actually clear context in stream-json mode,

@@ -157,6 +157,32 @@ impl ClaudeSender {
         rust_debug_log("SENDER", "Interrupt sent");
         Ok(())
     }
+
+    /// Send a JSON control message to the bridge (non-critical, ignores broken pipe)
+    pub fn send_control(&mut self, json: &str) -> Result<(), String> {
+        rust_debug_log("SENDER", &format!("Sending control: {}", json));
+
+        if let Err(e) = self.stdin.write_all(json.as_bytes()) {
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                return Ok(());
+            }
+            return Err(format!("Write error: {}", e));
+        }
+        if let Err(e) = self.stdin.write_all(b"\n") {
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                return Ok(());
+            }
+            return Err(format!("Write error: {}", e));
+        }
+        if let Err(e) = self.stdin.flush() {
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                return Ok(());
+            }
+            return Err(format!("Flush error: {}", e));
+        }
+
+        Ok(())
+    }
 }
 
 /// Receiver half of the Claude process - handles reading events from channel.

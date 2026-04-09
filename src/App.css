@@ -604,7 +604,7 @@ body {
 .sidebar-toggle-btn {
   position: fixed;
   top: 0;
-  right: 80px;
+  right: 104px;
   height: 32px;
   width: 24px;
   display: flex;
@@ -656,6 +656,19 @@ body {
 }
 
 /* Position top bar buttons from right edge — use explicit classes, not nth-of-type */
+.top-bar-btn.btn-memory {
+  right: 80px;
+  padding-bottom: 2px;
+}
+
+.top-bar-btn.btn-memory.active {
+  color: rgba(133, 153, 0, 0.85);  /* Solarized green — matches connection icon */
+}
+
+.top-bar-btn.btn-memory:not(.active) {
+  color: rgba(220, 50, 47, 0.6);  /* Solarized red, muted */
+}
+
 .top-bar-btn.btn-new-window {
   right: 56px;
 }
@@ -668,7 +681,7 @@ body {
 .token-indicator {
   position: fixed;
   top: 0;
-  right: 104px;
+  right: 128px;
   height: 32px;
   display: flex;
   align-items: center;
