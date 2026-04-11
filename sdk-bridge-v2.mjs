@@ -20,6 +20,7 @@ import { join, dirname, basename } from "path";
 import { tmpdir, homedir, userInfo } from "os";
 import { fileURLToPath } from "url";
 import { ContextEngine } from "./context/engine.mjs";
+import { resolveZepUserId } from "./context/context-map.mjs";
 
 // Debug logging control - set CLAUDIA_DEBUG=1 to enable
 const DEBUG_ENABLED = process.env.CLAUDIA_DEBUG === "1";
@@ -197,21 +198,27 @@ async function main() {
 
   // --- Context Engine (Zep memory pipeline) ---
   // Initialized from env vars. Set ZEP_API_KEY to enable.
+  // Zep user ID is resolved from the launch directory to partition graphs by domain
+  // (code, subjectiv, personal), mirroring Mem0's app_id mapping.
   const hasZepKey = !!process.env.ZEP_API_KEY;
+  const launchDir = process.env.CLAUDIA_LAUNCH_DIR || process.cwd();
+  const zepUserId = resolveZepUserId(launchDir, process.env.ZEP_USER_ID || "jason");
   const contextEngine = new ContextEngine({
     zep: hasZepKey ? {
       apiKey: process.env.ZEP_API_KEY,
-      userId: process.env.ZEP_USER_ID || "jason",
+      userId: zepUserId,
       defaultTemplate: process.env.ZEP_DEFAULT_TEMPLATE || "general",
     } : null,
     defaultActive: process.env.CLAUDIA_MEMORY !== "0",
   });
   let assistantTextBuffer = ""; // Accumulate assistant response for Zep ingestion
   // Always log context engine status to stderr (visible in terminal)
-  console.error(`[BRIDGE] ContextEngine: zep=${hasZepKey}, active=${contextEngine.isActive()}`);
+  console.error(`[BRIDGE] ContextEngine: zep=${hasZepKey}, active=${contextEngine.isActive()}, userId=${zepUserId}, launchDir=${launchDir}`);
   debugLog("CONTEXT_ENGINE", {
     zepEnabled: hasZepKey,
     active: contextEngine.isActive(),
+    zepUserId,
+    launchDir,
   });
 
   // Build Claude args - optionally resume a session

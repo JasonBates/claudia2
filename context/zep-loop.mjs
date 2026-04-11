@@ -38,6 +38,20 @@ export class ZepLoop {
     this.episodeCount = 0;
 
     try {
+      // Ensure user exists before warming or creating threads.
+      // Zep auto-creates users on thread.create(), but user.warm() fails
+      // with a 404 if the user doesn't exist yet (e.g., first session with
+      // a new partitioned user ID like "jason-code").
+      try {
+        await this.client.user.get(this.userId);
+      } catch (e) {
+        if (e.statusCode === 404) {
+          await this.client.user.add({ userId: this.userId });
+        } else {
+          throw e;
+        }
+      }
+
       // Warm and create in parallel — they're independent calls
       const warmPromise = this.client.user.warm(this.userId);
       const createPromise = this.client.thread.create({
