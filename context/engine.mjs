@@ -25,6 +25,7 @@ export class ContextEngine {
     this.active = config.defaultActive !== false;
     this._lastContext = null;
     this._sessionStartPromise = null; // Tracks in-flight session start
+    this._turnCount = 0; // Track turns to strip user summary after first
 
     // Initialize Zep if configured
     if (config.zep?.apiKey) {
@@ -56,6 +57,7 @@ export class ContextEngine {
   async onSessionStart(sessionId, sessionType = "general") {
     if (!this.active || !this.zepLoop) return null;
 
+    this._turnCount = 0;
     this._sessionStartPromise = this.zepLoop.start(sessionId, sessionType)
       .catch((err) => {
         console.error("[ContextEngine] Session start failed:", err.message);
@@ -93,6 +95,7 @@ export class ContextEngine {
         ),
       ]);
       this._lastContext = ctx;
+      this._turnCount++;
       return this._formatContextBlock(ctx);
     } catch (err) {
       if (err.message === "timeout") {
@@ -119,12 +122,28 @@ export class ContextEngine {
 
   /**
    * Format the raw context into the XML block for injection.
+   * After the first turn, strips the USER_SUMMARY section to save tokens —
+   * the summary is mostly static and only needs to be seen once per session.
    * @private
    */
   _formatContextBlock(zepContext) {
     if (!zepContext) return null;
 
-    return `<long_term_memory>\n${zepContext}\n</long_term_memory>`;
+    let context = zepContext;
+
+    // After turn 1, strip the user summary (it's static and wastes tokens)
+    if (this._turnCount > 1) {
+      context = context.replace(
+        /# This is the user summary\n<USER_SUMMARY>[\s\S]*?<\/USER_SUMMARY>\n*/,
+        ""
+      );
+    }
+
+    // If stripping left nothing meaningful, skip injection entirely
+    const stripped = context.replace(/<\/?[A-Z_]+>/g, "").trim();
+    if (!stripped) return null;
+
+    return `<long_term_memory>\n${context}\n</long_term_memory>`;
   }
 
   /** Get the last retrieved context (for preview panel) */
