@@ -1223,7 +1223,36 @@ async function main() {
     source = "unknown"
   }) {
     const normalizedTaskId = normalizeAgentId(taskId);
-    const resolvedToolUseId = toolUseId || resolveBgToolUseId(normalizedTaskId);
+    let resolvedToolUseId = toolUseId || resolveBgToolUseId(normalizedTaskId);
+
+    // Reverse lookup: if bgAgentMap doesn't have this taskId, scan bgTaskStateByTool
+    // and completedBgAgents for a matching entry. This handles the case where
+    // bg_task_completed arrived with only a toolUseId (no taskId from SDK), and now
+    // bg_task_result arrives with only a taskId (from TaskOutput XML).
+    if (!resolvedToolUseId && normalizedTaskId) {
+      for (const [tuId, st] of bgTaskStateByTool) {
+        if (st.taskId === normalizedTaskId) {
+          resolvedToolUseId = tuId;
+          break;
+        }
+      }
+      if (!resolvedToolUseId) {
+        for (const [tuId, meta] of completedBgAgents) {
+          if (meta.taskId === normalizedTaskId) {
+            resolvedToolUseId = tuId;
+            break;
+          }
+        }
+      }
+      if (resolvedToolUseId) {
+        debugLog("BG_TASK_RESULT_REVERSE_LOOKUP", {
+          taskId: normalizedTaskId,
+          resolvedToolUseId,
+          source
+        });
+      }
+    }
+
     const state = resolvedToolUseId ? getOrCreateBgTaskState(resolvedToolUseId) : null;
 
     if (state && normalizedTaskId && !state.taskId) {

@@ -141,6 +141,13 @@ export function handleStatus(event: NormalizedStatusEvent, ctx: EventContext): v
     return;
   }
 
+  // Suppress transient SDK status messages (e.g. "requesting") that aren't
+  // meaningful to display — they appear before every tool use.
+  const transientStatuses = ["requesting"];
+  if (transientStatuses.includes(event.message.toLowerCase().trim())) {
+    return;
+  }
+
   // Regular status message
   ctx.dispatch({
     type: "ADD_MESSAGE",
@@ -880,8 +887,24 @@ export function handleBgTaskResult(
   const toolUseId = resolveBackgroundTaskToolUseId(event.taskId || "", event.toolUseId, ctx);
   const result = event.result || "";
 
-  if (taskKey) {
-    ctx.refs.bgPendingFinalTaskKeysRef?.current.delete(taskKey);
+  const pendingSet = ctx.refs.bgPendingFinalTaskKeysRef?.current;
+  if (taskKey && pendingSet) {
+    pendingSet.delete(taskKey);
+  }
+
+  // If the resolved taskKey didn't match a pending entry, try alternate keys.
+  // This handles the case where bg_task_completed created a canonical key from
+  // toolUseId only (no taskId), but bg_task_result arrives with a different
+  // taskId that resolves to a new canonical key.
+  if (pendingSet && pendingSet.size > 0) {
+    const normalizedToolUseId = (event.toolUseId || "").trim();
+    const normalizedTaskId = (event.taskId || "").trim();
+    if (normalizedToolUseId && pendingSet.has(normalizedToolUseId)) {
+      pendingSet.delete(normalizedToolUseId);
+    }
+    if (normalizedTaskId && pendingSet.has(normalizedTaskId)) {
+      pendingSet.delete(normalizedTaskId);
+    }
   }
 
   // Always surface final bg task output as a dedicated message keyed by canonical task key.
@@ -896,6 +919,11 @@ export function handleBgTaskResult(
   }
 
   markOriginalTaskToolCompleted(toolUseId, event.duration || 0, event.toolCount || 0, ctx);
+
+  // Set loading state so the follow-up turn (where the LLM processes bg
+  // results) shows a typing indicator. Without this, there's a visible gap
+  // between the bg result arriving and the LLM's response text appearing.
+  ctx.dispatch({ type: "SET_STREAMING_LOADING", payload: true });
 }
 
 /**

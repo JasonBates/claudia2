@@ -664,23 +664,18 @@ pub async fn send_message(
                 }; // Lock released here (RAII)
 
                 if let Some(event) = event {
-                    // Only forward subagent-related events from the background pump.
-                    // Other events (Done, TextDelta, Result, etc.) could interfere
-                    // with a new request the user has started since the main loop ended.
-                    if matches!(
-                        &event,
-                        ClaudeEvent::SubagentEnd { .. }
-                            | ClaudeEvent::SubagentProgress { .. }
-                            | ClaudeEvent::SubagentStart { .. }
-                            | ClaudeEvent::BgTaskRegistered { .. }
-                            | ClaudeEvent::BgTaskCompleted { .. }
-                            | ClaudeEvent::BgTaskResult { .. }
-                    ) {
-                        cmd_debug_log("PUMP", &format!("Forwarding bg event: {:?}", event));
-                        let _ = pump_app.emit("claude-bg-event", &event);
-                    } else {
-                        cmd_debug_log("PUMP", &format!("Filtering out non-subagent bg event: {:?}", event));
-                    }
+                    // Forward all events from the background pump. The bridge
+                    // (sdk-bridge-v2.mjs) already handles suppression of events
+                    // that shouldn't reach the UI via suppressUiStream. If the
+                    // user sends a new message, the pump is cancelled before the
+                    // main loop starts, so there's no interference.
+                    //
+                    // Previously this was a whitelist of subagent/bg-task events,
+                    // but that dropped follow-up turn events (text, permissions,
+                    // tool calls, result, done) from bg agent completions, causing
+                    // the app to get stuck.
+                    cmd_debug_log("PUMP", &format!("Forwarding bg event: {:?}", event));
+                    let _ = pump_app.emit("claude-bg-event", &event);
                 }
             }
         });
