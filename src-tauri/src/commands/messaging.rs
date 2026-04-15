@@ -664,18 +664,31 @@ pub async fn send_message(
                 }; // Lock released here (RAII)
 
                 if let Some(event) = event {
-                    // Forward all events from the background pump. The bridge
-                    // (sdk-bridge-v2.mjs) already handles suppression of events
-                    // that shouldn't reach the UI via suppressUiStream. If the
-                    // user sends a new message, the pump is cancelled before the
-                    // main loop starts, so there's no interference.
+                    // Only forward background-task and subagent events from the
+                    // pump. The bridge emits these asynchronously after the main
+                    // turn's Done/Result — they represent bg agent lifecycle
+                    // updates, not the main conversation stream.
                     //
-                    // Previously this was a whitelist of subagent/bg-task events,
-                    // but that dropped follow-up turn events (text, permissions,
-                    // tool calls, result, done) from bg agent completions, causing
-                    // the app to get stuck.
-                    cmd_debug_log("PUMP", &format!("Forwarding bg event: {:?}", event));
-                    let _ = pump_app.emit("claude-bg-event", &event);
+                    // Forwarding ALL events (as we tried before) causes duplicate
+                    // messages: the bridge emits both an early `done` (on
+                    // message_stop) and a late `result` (from the CLI). The main
+                    // loop breaks on `done`, then the pump picks up `result` and
+                    // forwards it, triggering a second FINISH_STREAMING in the
+                    // frontend which creates a partial duplicate of the response.
+                    if matches!(
+                        &event,
+                        ClaudeEvent::SubagentStart { .. }
+                            | ClaudeEvent::SubagentProgress { .. }
+                            | ClaudeEvent::SubagentEnd { .. }
+                            | ClaudeEvent::BgTaskRegistered { .. }
+                            | ClaudeEvent::BgTaskCompleted { .. }
+                            | ClaudeEvent::BgTaskResult { .. }
+                    ) {
+                        cmd_debug_log("PUMP", &format!("Forwarding bg event: {:?}", event));
+                        let _ = pump_app.emit("claude-bg-event", &event);
+                    } else {
+                        cmd_debug_log("PUMP", &format!("Dropping non-bg event: {:?}", event));
+                    }
                 }
             }
         });
