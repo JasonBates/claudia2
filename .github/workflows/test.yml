@@ -59,6 +59,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Bundle bridge resources
+        run: npm run bundle:bridge
+
       - name: Run Rust tests
         working-directory: src-tauri
         run: cargo test
