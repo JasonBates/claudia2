@@ -564,20 +564,29 @@ pub async fn send_message(
                     // Note: If Closed arrives here, the drain phase of next send_message will handle restart
                     drop(receiver_guard); // Release lock for trailing event collection
                     let mut trailing_count = 0;
-                    for _ in 0..5 {
+                    // Drain trailing events until we hit a 20ms idle gap.
+                    // Hard cap prevents pathological loops if the bridge floods events.
+                    const MAX_TRAILING_EVENTS: u32 = 100;
+                    loop {
+                        if trailing_count >= MAX_TRAILING_EVENTS {
+                            cmd_debug_log(
+                                "TRAILING",
+                                &format!("Hit MAX_TRAILING_EVENTS={}", MAX_TRAILING_EVENTS),
+                            );
+                            break;
+                        }
                         let mut rg = receiver_arc.lock().await;
-                        if let Some(r) = rg.as_mut() {
-                            match timeout(Duration::from_millis(20), r.recv_event()).await {
-                                Ok(Some(trailing_event)) => {
-                                    trailing_count += 1;
-                                    cmd_debug_log(
-                                        "TRAILING",
-                                        &format!("#{} {:?}", trailing_count, trailing_event),
-                                    );
-                                    let _ = channel.send(trailing_event);
-                                }
-                                _ => break,
+                        let Some(r) = rg.as_mut() else { break };
+                        match timeout(Duration::from_millis(20), r.recv_event()).await {
+                            Ok(Some(trailing_event)) => {
+                                trailing_count += 1;
+                                cmd_debug_log(
+                                    "TRAILING",
+                                    &format!("#{} {:?}", trailing_count, trailing_event),
+                                );
+                                let _ = channel.send(trailing_event);
                             }
+                            _ => break,
                         }
                     }
                     if trailing_count > 0 {

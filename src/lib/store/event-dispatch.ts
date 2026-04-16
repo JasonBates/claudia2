@@ -919,11 +919,6 @@ export function handleBgTaskResult(
   }
 
   markOriginalTaskToolCompleted(toolUseId, event.duration || 0, event.toolCount || 0, ctx);
-
-  // Set loading state so the follow-up turn (where the LLM processes bg
-  // results) shows a typing indicator. Without this, there's a visible gap
-  // between the bg result arriving and the LLM's response text appearing.
-  ctx.dispatch({ type: "SET_STREAMING_LOADING", payload: true });
 }
 
 /**

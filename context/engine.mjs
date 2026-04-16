@@ -87,12 +87,13 @@ export class ContextEngine {
 
     // Single API call: ingest message + get context shaped by it.
     // Timeout: send without context rather than block the conversation.
+    let timeoutId = null;
     try {
       const ctx = await Promise.race([
         this.zepLoop.ingestAndRetrieve(message),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("timeout")), CONTEXT_TIMEOUT_MS)
-        ),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error("timeout")), CONTEXT_TIMEOUT_MS);
+        }),
       ]);
       this._lastContext = ctx;
       this._turnCount++;
@@ -103,6 +104,8 @@ export class ContextEngine {
         return null;
       }
       throw err;
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
     }
   }
 

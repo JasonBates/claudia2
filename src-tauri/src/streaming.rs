@@ -137,10 +137,16 @@ pub fn run_streaming(
         for line in reader.lines() {
             match line {
                 Ok(line) => {
-                    let _ = stdout_channel.send(CommandEvent::Stdout {
-                        command_id: stdout_id.clone(),
-                        line,
-                    });
+                    if stdout_channel
+                        .send(CommandEvent::Stdout {
+                            command_id: stdout_id.clone(),
+                            line,
+                        })
+                        .is_err()
+                    {
+                        // Frontend dropped the channel; stop reading.
+                        break;
+                    }
                 }
                 Err(e) => {
                     eprintln!("[STREAMING] Error reading stdout: {}", e);
@@ -158,10 +164,16 @@ pub fn run_streaming(
         for line in reader.lines() {
             match line {
                 Ok(line) => {
-                    let _ = stderr_channel.send(CommandEvent::Stderr {
-                        command_id: stderr_id.clone(),
-                        line,
-                    });
+                    if stderr_channel
+                        .send(CommandEvent::Stderr {
+                            command_id: stderr_id.clone(),
+                            line,
+                        })
+                        .is_err()
+                    {
+                        // Frontend dropped the channel; stop reading.
+                        break;
+                    }
                 }
                 Err(e) => {
                     eprintln!("[STREAMING] Error reading stderr: {}", e);

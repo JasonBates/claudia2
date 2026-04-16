@@ -213,6 +213,7 @@ async function main() {
     defaultActive: process.env.CLAUDIA_MEMORY !== "0",
   });
   let assistantTextBuffer = ""; // Accumulate assistant response for Zep ingestion
+  let assistantTextTruncated = false; // One-shot flag — only log truncation once per turn
   // Always log context engine status to stderr (visible in terminal)
   console.error(`[BRIDGE] ContextEngine: zep=${hasZepKey}, active=${contextEngine.isActive()}, userId=${zepUserId}, launchDir=${launchDir}`);
   debugLog("CONTEXT_ENGINE", {
@@ -1710,9 +1711,14 @@ async function main() {
         if (event.delta?.type === "text_delta" && !suppressUiStream) {
           // Stream text chunk to UI
           sendEvent("text_delta", { text: event.delta.text });
-          // Accumulate assistant text for Zep ingestion (capped at 4KB)
+          // Accumulate assistant text for Zep ingestion. Cap matches
+          // MAX_CONTENT_LENGTH in zep-loop.mjs so we don't buffer bytes
+          // Zep would discard. Log once per turn when truncation occurs.
           if (assistantTextBuffer.length < 4096) {
             assistantTextBuffer += event.delta.text;
+          } else if (!assistantTextTruncated) {
+            assistantTextTruncated = true;
+            debugLog("ZEP_ASSISTANT_TRUNCATED", { bufferedChars: assistantTextBuffer.length });
           }
         }
         if (event.delta?.type === "input_json_delta") {
@@ -1725,38 +1731,63 @@ async function main() {
           if (currentToolName === "Task" && currentToolId) {
             const subagent = activeSubagents.get(currentToolId);
             if (subagent && subagent.status === "starting") {
-              // Enforce buffer size limit
-              if (taskInputBuffer.length < MAX_TASK_INPUT_SIZE) {
+              // Enforce buffer size limit. If the buffer would overflow,
+              // emit a placeholder subagent_start so the UI still tracks
+              // the subagent rather than leaving it stuck in "starting".
+              if (taskInputBuffer.length + event.delta.partial_json.length <= MAX_TASK_INPUT_SIZE) {
                 taskInputBuffer += event.delta.partial_json;
+              } else if (subagent.status === "starting") {
+                debugLog("TASK_INPUT_OVERFLOW", {
+                  id: currentToolId,
+                  bufferedBytes: taskInputBuffer.length,
+                  maxBytes: MAX_TASK_INPUT_SIZE,
+                });
+                subagent.agentType = "unknown";
+                subagent.description = "(input too large to parse)";
+                subagent.prompt = "";
+                subagent.status = "running";
+                const bgState = getOrCreateBgTaskState(currentToolId);
+                if (bgState) {
+                  bgState.agentType = "unknown";
+                }
+                sendEvent("subagent_start", {
+                  id: currentToolId,
+                  agentType: "unknown",
+                  description: "(input too large to parse)",
+                  prompt: ""
+                });
+                taskInputBuffer = "";
               }
               // Try to parse accumulated JSON to extract subagent details
-              try {
-                const parsed = JSON.parse(taskInputBuffer);
-                if (parsed.subagent_type) {
-                  subagent.agentType = parsed.subagent_type;
-                  subagent.description = parsed.description || "";
-                  subagent.prompt = parsed.prompt || "";
-                  subagent.status = "running";
+              if (subagent.status === "starting") {
+                try {
+                  const parsed = JSON.parse(taskInputBuffer);
+                  if (parsed.subagent_type) {
+                    subagent.agentType = parsed.subagent_type;
+                    subagent.description = parsed.description || "";
+                    subagent.prompt = parsed.prompt || "";
+                    subagent.status = "running";
 
-                  const bgState = getOrCreateBgTaskState(currentToolId);
-                  if (bgState) {
-                    bgState.agentType = parsed.subagent_type || "unknown";
+                    const bgState = getOrCreateBgTaskState(currentToolId);
+                    if (bgState) {
+                      bgState.agentType = parsed.subagent_type || "unknown";
+                    }
+
+                    sendEvent("subagent_start", {
+                      id: currentToolId,
+                      agentType: parsed.subagent_type,
+                      description: parsed.description || "",
+                      prompt: (parsed.prompt || "").slice(0, 200)
+                    });
+                    debugLog("SUBAGENT_START", {
+                      id: currentToolId,
+                      agentType: parsed.subagent_type,
+                      description: parsed.description
+                    });
                   }
-
-                  sendEvent("subagent_start", {
-                    id: currentToolId,
-                    agentType: parsed.subagent_type,
-                    description: parsed.description || "",
-                    prompt: (parsed.prompt || "").slice(0, 200)
-                  });
-                  debugLog("SUBAGENT_START", {
-                    id: currentToolId,
-                    agentType: parsed.subagent_type,
-                    description: parsed.description
-                  });
+                } catch {
+                  // JSON incomplete, keep accumulating
                 }
-              } catch {
-                // JSON incomplete, keep accumulating
               }
             }
           }
@@ -2490,6 +2521,7 @@ async function main() {
 
     // Reset assistant text buffer for new turn
     assistantTextBuffer = "";
+    assistantTextTruncated = false;
 
     // Retrieve Zep context for this turn (only for non-slash, non-multimodal text)
     // Context retrieval runs in parallel with nothing — it must complete before we send
