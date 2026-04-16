@@ -5,7 +5,7 @@
 export type ContextThreshold = 'critical' | 'warning' | 'ok';
 
 export const CONTEXT_LIMIT_1M = 1_000_000;
-export const CONTEXT_LIMIT_DEFAULT = 200_000;
+export const CONTEXT_LIMIT_DEFAULT = 250_000;
 export const DEFAULT_CONTEXT_LIMIT = CONTEXT_LIMIT_DEFAULT;
 
 /**
