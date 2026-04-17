@@ -179,8 +179,6 @@ async function main() {
   const BG_OUTPUT_FILE_RESOLVE_RETRY_MS = 700;
   const BG_OUTPUT_FILE_RESOLVE_MAX_ATTEMPTS = 10;
   const MAX_BG_FINALIZED_KEYS = 2000;        // Prevent unbounded dedupe key growth
-  const PENDING_CLI_RESULT_TTL_MS = 15000;   // Default TTL when no background tasks are pending
-  const PENDING_CLI_RESULT_BG_TTL_MS = 20 * 60 * 1000; // Keep acks longer while bg tasks are active
   const MAX_PENDING_CLI_RESULT_ACKS = 50;    // Bound queue growth if CLI emits unmatched done events
 
   // Domains allowed through the sandbox network proxy
@@ -420,26 +418,7 @@ async function main() {
     arm(SAFETY_NET_IDLE_MS);
   }
 
-  function prunePendingCliResultAcks(now = Date.now()) {
-    if (pendingCliResultAcks.length === 0) return;
-    const hasPendingBackground = activeSubagents.size > 0 || completedBgAgents.size > 0;
-    const ttlMs = hasPendingBackground ? PENDING_CLI_RESULT_BG_TTL_MS : PENDING_CLI_RESULT_TTL_MS;
-    const before = pendingCliResultAcks.length;
-    pendingCliResultAcks = pendingCliResultAcks.filter((entry) =>
-      now - entry.createdAt <= ttlMs
-    );
-    if (pendingCliResultAcks.length !== before) {
-      debugLog("PENDING_CLI_RESULT_ACKS_PRUNED", {
-        before,
-        after: pendingCliResultAcks.length,
-        ttlMs,
-        hasPendingBackground
-      });
-    }
-  }
-
   function enqueuePendingCliResultAck() {
-    prunePendingCliResultAcks();
     pendingCliResultAcks.push({ turnId: currentTurnId, createdAt: Date.now() });
     while (pendingCliResultAcks.length > MAX_PENDING_CLI_RESULT_ACKS) {
       pendingCliResultAcks.shift();
@@ -448,8 +427,6 @@ async function main() {
   }
 
   function consumePendingCliResultAck() {
-    prunePendingCliResultAcks();
-    // Only consume acks from a previous turn — never suppress the current turn's result
     const idx = pendingCliResultAcks.findIndex(entry => entry.turnId < currentTurnId);
     if (idx === -1) return false;
     pendingCliResultAcks.splice(idx, 1);
