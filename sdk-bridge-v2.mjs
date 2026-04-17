@@ -2086,9 +2086,21 @@ async function main() {
             break;
 
           case "stream_event":
-            // After main result is sent, Claude may continue emitting extra synthesis text
-            // while background tasks complete. Keep processing stream events for internal
-            // state tracking, but optionally suppress user-visible deltas.
+            // The CLI emits a fresh message_start when synthesizing bg agent
+            // results into a follow-up turn. Reset turn-local flags so the new
+            // message renders instead of being eaten by the post-main-result
+            // suppression gate. Don't bump currentTurnId — that's reserved for
+            // user-initiated turns so prior-turn ack matching stays correct.
+            if (msg.event?.type === "message_start" && mainResultSent) {
+              debugLog("CLI_FOLLOWUP_TURN", {
+                completedBgAgents: completedBgAgents.size,
+                activeSubagents: activeSubagents.size,
+              });
+              mainResultSent = false;
+              lastStopReason = null;
+              assistantTextBuffer = "";
+              assistantTextTruncated = false;
+            }
             handleStreamEvent(
               msg.event,
               msg.session_id,

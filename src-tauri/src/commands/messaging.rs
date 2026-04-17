@@ -673,30 +673,25 @@ pub async fn send_message(
                 }; // Lock released here (RAII)
 
                 if let Some(event) = event {
-                    // Only forward background-task and subagent events from the
-                    // pump. The bridge emits these asynchronously after the main
-                    // turn's Done/Result — they represent bg agent lifecycle
-                    // updates, not the main conversation stream.
+                    // Forward every pump event EXCEPT Result. The bridge emits
+                    // both an early `done` (on message_stop) and a late CLI
+                    // `result` for the same turn — the main loop breaks on
+                    // `done`, so `result` arrives via the pump. Forwarding it
+                    // triggers a second FINISH_STREAMING in the frontend whose
+                    // fallbackContent creates a partial duplicate bubble.
                     //
-                    // Forwarding ALL events (as we tried before) causes duplicate
-                    // messages: the bridge emits both an early `done` (on
-                    // message_stop) and a late `result` (from the CLI). The main
-                    // loop breaks on `done`, then the pump picks up `result` and
-                    // forwards it, triggering a second FINISH_STREAMING in the
-                    // frontend which creates a partial duplicate of the response.
-                    if matches!(
-                        &event,
-                        ClaudeEvent::SubagentStart { .. }
-                            | ClaudeEvent::SubagentProgress { .. }
-                            | ClaudeEvent::SubagentEnd { .. }
-                            | ClaudeEvent::BgTaskRegistered { .. }
-                            | ClaudeEvent::BgTaskCompleted { .. }
-                            | ClaudeEvent::BgTaskResult { .. }
-                    ) {
-                        cmd_debug_log("PUMP", &format!("Forwarding bg event: {:?}", event));
-                        let _ = pump_app.emit("claude-bg-event", &event);
+                    // Every other event is safe: bg-task/subagent lifecycle is
+                    // intentional pump traffic, and the CLI's follow-up turn
+                    // after bg agents return (text_delta, block_end, done,
+                    // etc.) needs to flow through so the synthesized response
+                    // renders. A second `done` in the pump is a no-op —
+                    // FINISH_STREAMING on empty streaming state creates no
+                    // new message.
+                    if matches!(&event, ClaudeEvent::Result { .. }) {
+                        cmd_debug_log("PUMP", &format!("Dropping Result (dup guard): {:?}", event));
                     } else {
-                        cmd_debug_log("PUMP", &format!("Dropping non-bg event: {:?}", event));
+                        cmd_debug_log("PUMP", &format!("Forwarding event: {:?}", event));
+                        let _ = pump_app.emit("claude-bg-event", &event);
                     }
                 }
             }
