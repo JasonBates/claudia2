@@ -16,21 +16,32 @@
 ## Debug Mode (Extensive Logging)
 Enable with `CLAUDIA_DEBUG=1` environment variable.
 
-**Quick start:**
+**Quick start (dev mode, picks up local source changes):**
 ```bash
-./scripts/run-claudia-debug.sh
+CLAUDIA_DEBUG=1 ./scripts/run.sh --dev
 ```
 
+**Quick start (installed app):**
+```bash
+CLAUDIA_DEBUG=1 /Applications/Claudia2.app/Contents/MacOS/claudia2 "$PWD"
+```
+
+Note: `./scripts/run-claudia-debug.sh` is **broken for claudia2** — it hardcodes `/Applications/Claudia.app/Contents/MacOS/Claudia` (the old, pre-rewrite app). Use the commands above instead.
+
 **Log locations (when debug enabled):**
-- `/tmp/claude-rust-debug.log` - Rust/Tauri logs
-- `/tmp/claude-bridge-debug.log` - SDK bridge logs
-- `/tmp/claude-commands-debug.log` - Command execution logs
+The bridge uses Node's `os.tmpdir()`, which on macOS is `$TMPDIR` (`/var/folders/.../T/`), **not** `/tmp`. Find them via:
+```bash
+ls "$TMPDIR"/claude-*-debug.log
+```
+Files produced:
+- `$TMPDIR/claude-rust-debug.log` - Rust/Tauri logs
+- `$TMPDIR/claude-bridge-debug.log` - SDK bridge logs
+- `$TMPDIR/claude-commands-debug.log` - Command execution logs
 
 **Troubleshooting workflow:**
-1. Launch with debug: `./scripts/run-claudia-debug.sh`
+1. Launch with debug (dev or installed command above)
 2. Reproduce the issue
-3. Run `./scripts/bugtime.sh` - collects logs and copies analysis prompt to clipboard
-4. Paste into a new conversation for analysis
+3. Inspect `$TMPDIR/claude-bridge-debug.log` (or run `./scripts/bugtime.sh` if it resolves paths correctly)
 
 **Manual log collection:**
 ```bash
