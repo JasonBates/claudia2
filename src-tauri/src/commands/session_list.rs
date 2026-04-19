@@ -37,10 +37,14 @@ pub struct SessionEntry {
 }
 
 /// Convert a working directory path to Claude's project directory name format.
+/// Matches Claude CLI's encoding: every non-ASCII-alphanumeric character becomes `-`.
 /// Example: "/Users/alice/code/repos/claudia" -> "-Users-alice-code-repos-claudia"
 /// Example: "/Users/alice/Documents/My Project" -> "-Users-alice-Documents-My-Project"
+/// Example: "/Users/alice/⭐️ Book" -> "-Users-alice----Book"
 fn path_to_project_dir(path: &str) -> String {
-    path.replace(['/', ' '], "-")
+    path.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// Get the Claude projects directory (~/.claude/projects)
@@ -546,6 +550,21 @@ mod tests {
         assert_eq!(
             path_to_project_dir("/Users/alice/code/repos/claudia"),
             "-Users-alice-code-repos-claudia"
+        );
+        assert_eq!(
+            path_to_project_dir("/Users/alice/Documents/My Project"),
+            "-Users-alice-Documents-My-Project"
+        );
+        // Non-ASCII characters (emoji + variation selector) and dots are replaced with dashes
+        assert_eq!(
+            path_to_project_dir(
+                "/Users/jasonbates/Obsidian/VAULTS/Trinity/080 Projects/\u{2B50}\u{FE0F} Subjectiv/Book"
+            ),
+            "-Users-jasonbates-Obsidian-VAULTS-Trinity-080-Projects----Subjectiv-Book"
+        );
+        assert_eq!(
+            path_to_project_dir("/Users/alice/.claude-worktrees/foo"),
+            "-Users-alice--claude-worktrees-foo"
         );
     }
 
