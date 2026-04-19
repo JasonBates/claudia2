@@ -1424,6 +1424,13 @@ function App() {
               </span>
             </Show>
             {session.workingDir()!.split("/").pop() || session.workingDir()}
+            <Show when={settings.claudeModel()}>
+              <span class="worktree-separator">:</span>
+              <span class="model-indicator">
+                {settings.availableModels.find((m) => m.value === settings.claudeModel())?.label
+                  ?? settings.claudeModel()}
+              </span>
+            </Show>
           </div>
         </Show>
 
@@ -1626,12 +1633,15 @@ function App() {
           availableFonts={settings.availableFonts}
           saveLocally={settings.saveLocally()}
           sandboxEnabled={settings.sandboxEnabled()}
+          claudeModel={settings.claudeModel()}
+          availableModels={settings.availableModels}
           onMarginChange={settings.setContentMargin}
           onFontChange={settings.setFontFamily}
           onFontSizeChange={settings.setFontSize}
           onColorSchemeChange={settings.setColorScheme}
           onSaveLocallyChange={settings.setSaveLocally}
           onSandboxEnabledChange={settings.setSandboxEnabled}
+          onClaudeModelChange={settings.setClaudeModel}
           onResetDefaults={settings.resetToDefaults}
           onClose={settings.closeSettings}
           currentVersion={appVersion()}

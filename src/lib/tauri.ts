@@ -507,11 +507,22 @@ export async function openNewWindowWithPicker(): Promise<void> {
  * Uses the Rust backend to spawn a new app instance via macOS open command.
  *
  * @param directory - The directory to open in the new window
+ * @param model - Optional model override (e.g. "opus", "claude-opus-4-6", "sonnet")
+ *                passed via CLAUDIA_MODEL_OVERRIDE env var so the new window runs
+ *                on that model without mutating config
  */
-export async function openInNewWindow(directory: string): Promise<void> {
-  console.log("[TAURI] Opening new window for directory:", directory);
-  await invoke("open_new_window", { directory });
+export async function openInNewWindow(directory: string, model?: string): Promise<void> {
+  console.log("[TAURI] Opening new window for directory:", directory, "model:", model);
+  await invoke("open_new_window", { directory, model });
   console.log("[TAURI] New window opened");
+}
+
+/**
+ * Get the Claude model the current window is actually running.
+ * Falls back to config.claude_model when no CLAUDIA_MODEL_OVERRIDE is set.
+ */
+export async function getCurrentModel(): Promise<string> {
+  return await invoke<string>("get_current_model");
 }
 
 /**

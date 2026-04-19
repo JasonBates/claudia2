@@ -49,14 +49,18 @@ pub async fn open_new_window_with_picker() -> Result<(), String> {
     }
 }
 
-/// Open a new Claudia window with the specified directory
+/// Open a new Claudia window with the specified directory and optional model override.
 ///
 /// Re-launches the current executable with the specified directory as an argument.
+/// When `model` is supplied, it is passed to the child process via the
+/// `CLAUDIA_MODEL_OVERRIDE` env var, which `spawn_claude_process` reads in preference
+/// to `config.claude_model`. This lets the new window run on a different model without
+/// mutating the persisted config.
 #[tauri::command]
-pub async fn open_new_window(directory: String) -> Result<(), String> {
+pub async fn open_new_window(directory: String, model: Option<String>) -> Result<(), String> {
     cmd_debug_log(
         "NEW_WINDOW",
-        &format!("open_new_window called with: {}", directory),
+        &format!("open_new_window called with: {} model={:?}", directory, model),
     );
 
     // Validate the directory exists
@@ -74,7 +78,12 @@ pub async fn open_new_window(directory: String) -> Result<(), String> {
     cmd_debug_log("NEW_WINDOW", &format!("Current executable: {:?}", exe_path));
 
     // Spawn new instance by running the executable directly
-    let result = Command::new(&exe_path).arg(&directory).spawn();
+    let mut cmd = Command::new(&exe_path);
+    cmd.arg(&directory);
+    if let Some(m) = model.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        cmd.env("CLAUDIA_MODEL_OVERRIDE", m);
+    }
+    let result = cmd.spawn();
 
     match result {
         Ok(_) => {
@@ -86,6 +95,24 @@ pub async fn open_new_window(directory: String) -> Result<(), String> {
             Err(format!("Failed to open new window: {}", e))
         }
     }
+}
+
+/// Get the Claude model this window is actually running.
+///
+/// Returns the `CLAUDIA_MODEL_OVERRIDE` env var if set (when the window was opened
+/// from another window's model dropdown), otherwise falls back to `config.claude_model`.
+/// Used by the settings dropdown so it reflects the window's live model, not the
+/// persisted default that may have been overridden at launch.
+#[tauri::command]
+pub async fn get_current_model(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    if let Ok(override_model) = std::env::var("CLAUDIA_MODEL_OVERRIDE") {
+        let trimmed = override_model.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    let config = state.config.lock().await;
+    Ok(config.claude_model.clone())
 }
 
 /// Check if a CLI directory argument was provided when launching the app.
