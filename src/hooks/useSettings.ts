@@ -4,6 +4,9 @@ import {
   saveConfig,
   hasLocalConfig,
   listColorSchemes,
+  getCurrentModel,
+  getLaunchDir,
+  openInNewWindow,
   ColorSchemeInfo,
 } from "../lib/tauri";
 import {
@@ -14,6 +17,11 @@ import {
 } from "../lib/theme-utils";
 
 export interface FontOption {
+  label: string;
+  value: string;
+}
+
+export interface ModelOption {
   label: string;
   value: string;
 }
@@ -29,6 +37,8 @@ export interface UseSettingsReturn {
   availableFonts: FontOption[];
   saveLocally: Accessor<boolean>;
   sandboxEnabled: Accessor<boolean>;
+  claudeModel: Accessor<string>;
+  availableModels: ModelOption[];
 
   // Actions
   openSettings: () => void;
@@ -39,6 +49,7 @@ export interface UseSettingsReturn {
   setColorScheme: (scheme: string | null) => void;
   setSaveLocally: (locally: boolean) => void;
   setSandboxEnabled: (enabled: boolean) => void;
+  setClaudeModel: (model: string) => Promise<void>;
   resetToDefaults: () => void;
 }
 
@@ -53,10 +64,17 @@ const CURATED_FONTS: FontOption[] = [
   { label: "Georgia", value: "Georgia, 'Times New Roman', serif" },
 ];
 
+const CURATED_MODELS: ModelOption[] = [
+  { label: "Opus 4.7", value: "opus" },
+  { label: "Opus 4.6", value: "claude-opus-4-6" },
+  { label: "Sonnet 4.6", value: "sonnet" },
+];
+
 const DEFAULT_MARGIN = 16;
 const DEFAULT_FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif";
 const DEFAULT_FONT_SIZE = 16;
 const DEFAULT_SCHEME = "Gruvbox Dark";
+const DEFAULT_MODEL = "opus";
 
 /**
  * Hook for managing appearance settings with live preview and persistence.
@@ -74,6 +92,7 @@ export function useSettings(): UseSettingsReturn {
   >([]);
   const [saveLocally, setSaveLocallySignal] = createSignal(false);
   const [sandboxEnabled, setSandboxEnabledSignal] = createSignal(true);
+  const [claudeModel, setClaudeModelSignal] = createSignal(DEFAULT_MODEL);
 
   // Load settings on mount
   onMount(async () => {
@@ -85,6 +104,12 @@ export function useSettings(): UseSettingsReturn {
       setFontSizeSignal(config.font_size ?? DEFAULT_FONT_SIZE);
       setColorSchemeSignal(config.color_scheme ?? DEFAULT_SCHEME);
       setSandboxEnabledSignal(config.sandbox_enabled ?? true);
+      // Read the live model for this window (env override wins over config).
+      try {
+        setClaudeModelSignal(await getCurrentModel());
+      } catch {
+        setClaudeModelSignal(config.claude_model ?? DEFAULT_MODEL);
+      }
 
       // Check if we're using a local config
       const isLocal = await hasLocalConfig();
@@ -175,6 +200,19 @@ export function useSettings(): UseSettingsReturn {
     persistSettings();
   };
 
+  const setClaudeModel = async (model: string) => {
+    // Picking a different model opens a new window in the same working directory
+    // running that model — it does NOT mutate the current window or the persisted config.
+    if (model === claudeModel()) return;
+    try {
+      const dir = await getLaunchDir();
+      await openInNewWindow(dir, model);
+      setIsOpen(false);
+    } catch (e) {
+      console.error("Failed to open new window with model:", e);
+    }
+  };
+
   const resetToDefaults = async () => {
     setContentMarginSignal(DEFAULT_MARGIN);
     setFontFamilySignal(DEFAULT_FONT);
@@ -194,6 +232,8 @@ export function useSettings(): UseSettingsReturn {
     availableFonts: CURATED_FONTS,
     saveLocally,
     sandboxEnabled,
+    claudeModel,
+    availableModels: CURATED_MODELS,
     openSettings: () => setIsOpen(true),
     closeSettings: () => setIsOpen(false),
     setContentMargin,
@@ -202,6 +242,7 @@ export function useSettings(): UseSettingsReturn {
     setColorScheme,
     setSaveLocally,
     setSandboxEnabled,
+    setClaudeModel,
     resetToDefaults,
   };
 }

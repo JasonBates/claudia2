@@ -1,6 +1,6 @@
 import { Component, For, createSignal, createEffect, onMount, onCleanup } from "solid-js";
 import type { ColorSchemeInfo } from "../lib/tauri";
-import type { FontOption } from "../hooks/useSettings";
+import type { FontOption, ModelOption } from "../hooks/useSettings";
 import type { UpdateStatus } from "../lib/store/types";
 
 interface SettingsModalProps {
@@ -12,12 +12,15 @@ interface SettingsModalProps {
   availableFonts: FontOption[];
   saveLocally: boolean;
   sandboxEnabled: boolean;
+  claudeModel: string;
+  availableModels: ModelOption[];
   onMarginChange: (margin: number) => void;
   onFontChange: (font: string) => void;
   onFontSizeChange: (size: number) => void;
   onColorSchemeChange: (scheme: string | null) => void;
   onSaveLocallyChange: (locally: boolean) => void;
   onSandboxEnabledChange: (enabled: boolean) => void;
+  onClaudeModelChange: (model: string) => void;
   onResetDefaults: () => void;
   onClose: () => void;
   // Update props
@@ -271,6 +274,23 @@ const SettingsModal: Component<SettingsModalProps> = (props) => {
                 </div>
               </>
             )}
+          </div>
+
+          {/* Claude Model Section */}
+          <div class="settings-section">
+            <label class="settings-label">Claude Model</label>
+            <p class="settings-hint">
+              This window is running the model shown below. Picking a different one opens a new window in the same project with that model — your current session stays untouched.
+            </p>
+            <select
+              class="settings-select"
+              value={props.claudeModel}
+              onChange={(e) => props.onClaudeModelChange(e.currentTarget.value)}
+            >
+              <For each={props.availableModels}>
+                {(model) => <option value={model.value}>{model.label}</option>}
+              </For>
+            </select>
           </div>
 
           {/* Sandbox Section */}

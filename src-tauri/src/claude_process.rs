@@ -362,9 +362,15 @@ pub fn spawn_claude_process_with_resume(
         .stderr(Stdio::inherit());
 
     // Pass model/runtime settings from config to bridge.
-    let claude_model = config.claude_model.trim();
+    // A CLAUDIA_MODEL_OVERRIDE env var (set by open_new_window) takes precedence over config.
+    let override_model = std::env::var("CLAUDIA_MODEL_OVERRIDE")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let claude_model = override_model
+        .unwrap_or_else(|| config.claude_model.trim().to_string());
     if !claude_model.is_empty() {
-        cmd.env("CLAUDIA_MODEL", claude_model);
+        cmd.env("CLAUDIA_MODEL", &claude_model);
     }
     if let Some(claude_binary_path) = config
         .claude_binary_path

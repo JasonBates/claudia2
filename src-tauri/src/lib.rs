@@ -129,6 +129,7 @@ pub fn run() {
             commands::directory_cmd::reopen_in_directory,
             commands::directory_cmd::has_cli_directory,
             commands::directory_cmd::get_pending_resume,
+            commands::directory_cmd::get_current_model,
             commands::directory_cmd::check_claude_code_installed,
             // Project listing (for project picker)
             commands::project_list::list_projects,
