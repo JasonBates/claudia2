@@ -111,10 +111,6 @@ export type Action =
       payload: { preTokens: number; postTokens: number };
     }
 
-  // === Memory Actions ===
-  | { type: "TOGGLE_MEMORY" }
-  | { type: "SET_MEMORY_ACTIVE"; payload: boolean }
-
   // === Update Actions ===
   | { type: "SET_UPDATE_AVAILABLE"; payload: UpdateInfo | null }
   | { type: "SET_UPDATE_PROGRESS"; payload: number | null }
@@ -342,13 +338,6 @@ export const actions = {
   ): Action => ({
     type: "COMPLETE_COMPACTION",
     payload: { preTokens, postTokens },
-  }),
-
-  // === Memory Actions ===
-  toggleMemory: (): Action => ({ type: "TOGGLE_MEMORY" }),
-  setMemoryActive: (active: boolean): Action => ({
-    type: "SET_MEMORY_ACTIVE",
-    payload: active,
   }),
 
   // === Update Actions ===

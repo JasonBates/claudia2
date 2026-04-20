@@ -4,9 +4,9 @@
 [![Test](https://github.com/JasonBates/claudia2/actions/workflows/test.yml/badge.svg)](https://github.com/JasonBates/claudia2/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> **This is a personal custom build of [Claudia](https://github.com/JasonBates/claudia).** It adds Zep long-term memory, Obsidian vault integration, and other experimental features tailored to my workflow. If you're looking for a stable, general-purpose build, use [Claudia](https://github.com/JasonBates/claudia) instead.
+> **This is a personal custom build of [Claudia](https://github.com/JasonBates/claudia).** It adds Obsidian vault integration and other experimental features tailored to my workflow. If you're looking for a stable, general-purpose build, use [Claudia](https://github.com/JasonBates/claudia) instead.
 
-Claude Code, but pretty — with memory.
+Claude Code, but pretty.
 
 <p align="center">
   <a href="https://github.com/JasonBates/claudia2/releases/latest/download/Claudia2_universal.dmg">
@@ -176,20 +176,6 @@ Claudia includes 6 bundled color schemes (Solarized Dark/Light, Dracula, Nord, O
 - Any `.itermcolors` file from the web will work
 
 Note: iTerm2 does not need to be installed. Claudia reads the `.itermcolors` plist format directly.
-
-### Zep Memory
-
-Claudia2 integrates [Zep](https://www.getzep.com/) for long-term conversational memory. Zep ingests each conversation turn and retrieves relevant context from prior sessions automatically.
-
-**Setup:**
-
-1. Create a free Zep account and get an API key
-2. Add `ZEP_API_KEY` to `~/.env`:
-   ```
-   ZEP_API_KEY=your-key-here
-   ```
-
-The key is loaded from `~/.env` regardless of which project directory you launch from. You can also set it per-project by placing a `.env` file in that project's directory (takes precedence over `~/.env`).
 
 ### Advanced Runtime Config
 

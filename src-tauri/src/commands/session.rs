@@ -123,19 +123,6 @@ pub async fn send_interrupt(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-/// Toggle the memory pipeline (Zep) on or off
-#[tauri::command]
-pub async fn set_memory_active(state: State<'_, AppState>, active: bool) -> Result<(), String> {
-    let mut sender_guard = state.sender.lock().await;
-
-    if let Some(sender) = sender_guard.as_mut() {
-        let msg = format!(r#"{{"type":"memory_toggle","active":{}}}"#, active);
-        sender.send_control(&msg)?;
-    }
-
-    Ok(())
-}
-
 /// Check if a session is currently active
 #[tauri::command]
 pub async fn is_session_active(state: State<'_, AppState>) -> Result<bool, String> {
