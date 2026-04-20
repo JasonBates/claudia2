@@ -93,7 +93,7 @@ export CLAUDIA_LAUNCH_DIR="/path/to/test/directory"
 - **Tauri plugin permissions**: When adding a new Tauri plugin, remember to add its permissions to `src-tauri/capabilities/default.json`. The updater requires `"updater:default"` and `"process:allow-restart"`.
 - **Signing key mismatch**: The public key in `tauri.conf.json` must match the private key used for signing. When regenerating keys, update both GitHub secrets AND the pubkey in config.
 - **Password vs no-password keys**: If the signing key was generated with `--ci` (no password), do NOT set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the workflow. If generated with a password, it MUST be set.
-- **Bundle resources**: Any file imported by `sdk-bridge-v2.mjs` (or its dependencies like `context/engine.mjs`) must be listed in `bundle.resources` in `src-tauri/tauri.conf.json`. Missing resources work fine in dev mode but crash release builds with a broken pipe error.
+- **Bundle resources**: Any file imported by `sdk-bridge-v2.mjs` must be listed in `bundle.resources` in `src-tauri/tauri.conf.json`. Missing resources work fine in dev mode but crash release builds with a broken pipe error.
 
 ## Displaying Images
 To display an image inline, use the **Read tool** on the image file.

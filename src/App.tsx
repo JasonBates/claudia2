@@ -13,7 +13,7 @@ import PlanApprovalBar from "./components/PlanApprovalBar";
 import PermissionDialog from "./components/PermissionDialog";
 import Sidebar from "./components/Sidebar";
 import ErrorFallback from "./components/ErrorFallback";
-import { sendMessage, resumeSession, getSessionHistory, clearSession, sendPermissionResponse, sendQuestionResponse, sendQuestionCancel, getSchemeColors, openInNewWindow, openNewWindowWithPicker, getConfig, saveConfig, checkForUpdate, downloadAndInstallUpdate, restartApp, getAppVersion, hasBotApiKey, listProjects, reopenInDirectory, getLaunchDir, hasCliDirectory, getPendingResume, checkClaudeCodeInstalled, setMemoryActive } from "./lib/tauri";
+import { sendMessage, resumeSession, getSessionHistory, clearSession, sendPermissionResponse, sendQuestionResponse, sendQuestionCancel, getSchemeColors, openInNewWindow, openNewWindowWithPicker, getConfig, saveConfig, checkForUpdate, downloadAndInstallUpdate, restartApp, getAppVersion, hasBotApiKey, listProjects, reopenInDirectory, getLaunchDir, hasCliDirectory, getPendingResume, checkClaudeCodeInstalled } from "./lib/tauri";
 import type { ProjectInfo } from "./lib/tauri";
 import type { ThemeSettings } from "./lib/theme-utils";
 import { getContextThreshold, getContextLimit } from "./lib/context-utils";
@@ -1433,27 +1433,6 @@ function App() {
             </Show>
           </div>
         </Show>
-
-        <button
-          class="top-bar-btn btn-memory"
-          classList={{ active: store.memoryActive() }}
-          onClick={() => {
-            const newActive = !store.memoryActive();
-            store.dispatch(actions.toggleMemory());
-            setMemoryActive(newActive).catch(err =>
-              console.error("[MEMORY] Toggle failed:", err)
-            );
-          }}
-          title={`Memory: ${store.memoryActive() ? "Active" : "Off"}`}
-          aria-label="Toggle memory"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
-            <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>
-            <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>
-            <path d="M12 18v4"/>
-          </svg>
-        </button>
 
         <button
           class="top-bar-btn btn-new-window"
