@@ -8,7 +8,7 @@ type Mode = "auto" | "request" | "plan" | "bot";
 
 export interface CommandInputHandle {
   focus: () => void;
-  addImageFile: (file: File) => Promise<void>;
+  insertText: (text: string) => void;
 }
 
 interface CommandInputProps {
@@ -51,7 +51,7 @@ const CommandInput: Component<CommandInputProps> = (props) => {
   onMount(() => {
     focusInput();
     // Expose methods to parent via ref callback (synchronous)
-    props.ref?.({ focus: focusInput, addImageFile: addImageFromFile });
+    props.ref?.({ focus: focusInput, insertText });
     // Use Tauri's native window focus event instead of browser's window focus
     // The browser's window.focus event doesn't fire when the native window is activated
     const appWindow = getCurrentWindow();
@@ -127,6 +127,32 @@ const CommandInput: Component<CommandInputProps> = (props) => {
 
   const removeImage = (id: string) => {
     setImages((prev) => prev.filter((img) => img.id !== id));
+  };
+
+  const insertText = (text: string) => {
+    const current = value();
+    if (!textareaRef) {
+      setValue(current + text);
+      return;
+    }
+    const start = textareaRef.selectionStart;
+    const end = textareaRef.selectionEnd;
+    const before = current.slice(0, start);
+    const after = current.slice(end);
+    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before);
+    const needsTrailingSpace = after.length > 0 && !/^\s/.test(after);
+    const insertion = (needsLeadingSpace ? " " : "") + text + (needsTrailingSpace ? " " : "");
+    const newValue = before + insertion + after;
+    setValue(newValue);
+
+    const newCursor = start + insertion.length;
+    requestAnimationFrame(() => {
+      if (!textareaRef) return;
+      textareaRef.focus();
+      textareaRef.setSelectionRange(newCursor, newCursor);
+      textareaRef.style.height = "auto";
+      textareaRef.style.height = Math.min(textareaRef.scrollHeight, 200) + "px";
+    });
   };
 
   const handlePaste = async (e: ClipboardEvent) => {
