@@ -69,18 +69,22 @@ pub fn run() {
 
             // Check for file-based launch intent (from recall skill or external tools).
             // This sidesteps macOS Launch Services not reliably passing CLI args to app bundles.
-            let (file_dir, file_resume) = read_pending_launch();
+            let LaunchIntent { directory: file_dir, session_id: file_resume, prompt, result_socket } =
+                read_pending_launch();
 
             // File-based intent fills in any gaps left by CLI parsing
             let final_dir = cli_dir.or(file_dir);
             let final_resume = cli_resume.or(file_resume);
 
             if cmd_debug_enabled() {
-                cmd_debug_log("SETUP", &format!("Final: dir={:?}, resume={:?}", final_dir, final_resume));
+                cmd_debug_log("SETUP", &format!(
+                    "Final: dir={:?}, resume={:?}, prompt={:?}, socket={:?}",
+                    final_dir, final_resume, prompt.as_ref().map(|s| s.chars().take(40).collect::<String>()), result_socket
+                ));
             }
 
             // Create and manage AppState with CLI directory and optional resume session
-            let state = AppState::new(final_dir, final_resume);
+            let state = AppState::new(final_dir, final_resume, prompt, result_socket);
             app.manage(state);
 
             Ok(())
@@ -128,6 +132,7 @@ pub fn run() {
             commands::directory_cmd::reopen_in_directory,
             commands::directory_cmd::has_cli_directory,
             commands::directory_cmd::get_pending_resume,
+            commands::directory_cmd::get_pending_prompt,
             commands::directory_cmd::get_current_model,
             commands::directory_cmd::check_claude_code_installed,
             // Project listing (for project picker)
@@ -143,24 +148,49 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Read and consume a pending launch intent file written by external tools (e.g. recall skill).
+/// Parsed contents of a launch-intent file.
+struct LaunchIntent {
+    directory: Option<String>,
+    session_id: Option<String>,
+    /// Auto-submit this text as the first user message after the session is ready.
+    prompt: Option<String>,
+    /// Path to a Unix domain socket the app should connect to and stream events on.
+    /// Caller is the listener; the app is the client.
+    result_socket: Option<String>,
+}
+
+impl LaunchIntent {
+    fn empty() -> Self {
+        Self { directory: None, session_id: None, prompt: None, result_socket: None }
+    }
+}
+
+/// Read and consume a pending launch intent file written by external tools.
 ///
 /// Looks for files matching `~/.claudia/pending-launch-*.json` containing:
-///   { "directory": "/path/to/project", "sessionId": "uuid", "timestamp": "iso8601" }
+///   {
+///     "directory": "/path/to/project",      // optional — sets working dir
+///     "sessionId": "uuid",                  // optional — auto-resume that session
+///     "prompt": "do the thing",             // optional — auto-submit on startup
+///     "resultSocket": "/tmp/claudia.sock",  // optional — connect & stream JSONL events
+///     "timestamp": "iso8601"                // required — for freshness gating
+///   }
 ///
 /// Uses uniquely-named files (with UUID suffix) to avoid race conditions when
 /// multiple launches fire in quick succession. Picks the freshest non-stale file,
 /// then cleans up all pending files to prevent accumulation.
 ///
-/// Files older than 30 seconds are ignored as stale.
-fn read_pending_launch() -> (Option<String>, Option<String>) {
+/// Files older than 30 seconds are ignored as stale. The 30s window is a forgiving
+/// upper bound on cold-launch + first-paint; callers using `resultSocket` should
+/// have their own deadline on the socket read instead of relying on this.
+fn read_pending_launch() -> LaunchIntent {
     let claudia_dir = match dirs::home_dir() {
         Some(home) => home.join(".claudia"),
-        None => return (None, None),
+        None => return LaunchIntent::empty(),
     };
 
     if !claudia_dir.exists() {
-        return (None, None);
+        return LaunchIntent::empty();
     }
 
     // Collect all pending-launch-*.json files
@@ -173,11 +203,11 @@ fn read_pending_launch() -> (Option<String>, Option<String>) {
                 name.starts_with("pending-launch-") && name.ends_with(".json")
             })
             .collect(),
-        Err(_) => return (None, None),
+        Err(_) => return LaunchIntent::empty(),
     };
 
     if entries.is_empty() {
-        return (None, None);
+        return LaunchIntent::empty();
     }
 
     if cmd_debug_enabled() {
@@ -185,7 +215,7 @@ fn read_pending_launch() -> (Option<String>, Option<String>) {
     }
 
     // Parse all files, pick the freshest non-stale one
-    let mut best: Option<(String, String, chrono::DateTime<chrono::FixedOffset>, std::path::PathBuf)> = None;
+    let mut best: Option<(LaunchIntent, chrono::DateTime<chrono::FixedOffset>, std::path::PathBuf)> = None;
     let now = chrono::Utc::now();
 
     for entry in &entries {
@@ -214,12 +244,16 @@ fn read_pending_launch() -> (Option<String>, Option<String>) {
             continue; // Stale
         }
 
-        let dir = json.get("directory").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let session = json.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let intent = LaunchIntent {
+            directory: json.get("directory").and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty()),
+            session_id: json.get("sessionId").and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty()),
+            prompt: json.get("prompt").and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty()),
+            result_socket: json.get("resultSocket").and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty()),
+        };
 
         // Keep the freshest (most recent timestamp)
-        if best.as_ref().map_or(true, |(_, _, t, _)| file_time > *t) {
-            best = Some((dir, session, file_time, path.clone()));
+        if best.as_ref().map_or(true, |(_, t, _)| file_time > *t) {
+            best = Some((intent, file_time, path.clone()));
         }
     }
 
@@ -229,20 +263,22 @@ fn read_pending_launch() -> (Option<String>, Option<String>) {
     }
 
     match best {
-        Some((dir, session, _, path)) => {
+        Some((intent, _, path)) => {
             if cmd_debug_enabled() {
-                cmd_debug_log("SETUP", &format!("Using launch intent from {:?}: dir={:?}, session={:?}",
-                    path.file_name().unwrap_or_default(), dir, session));
+                cmd_debug_log("SETUP", &format!(
+                    "Using launch intent from {:?}: dir={:?}, session={:?}, has_prompt={}, has_socket={}",
+                    path.file_name().unwrap_or_default(),
+                    intent.directory, intent.session_id,
+                    intent.prompt.is_some(), intent.result_socket.is_some()
+                ));
             }
-            let dir = if dir.is_empty() { None } else { Some(dir) };
-            let session = if session.is_empty() { None } else { Some(session) };
-            (dir, session)
+            intent
         }
         None => {
             if cmd_debug_enabled() {
                 cmd_debug_log("SETUP", "All pending-launch files were stale");
             }
-            (None, None)
+            LaunchIntent::empty()
         }
     }
 }

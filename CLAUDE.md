@@ -58,6 +58,15 @@ Files produced:
 See [RELEASING.md](RELEASING.md) for instructions on creating new releases.
 Releases are triggered by pushing version tags (e.g., `v0.2.0`) to GitHub.
 
+## External Prompt API
+Claudia2 exposes an external entrypoint (`scripts/claudia-prompt`) that lets another process — including a Claude Code agent — fire a prompt at a fresh Claudia window and capture the assistant's reply on stdout. The window stays open for follow-up.
+
+```bash
+./scripts/claudia-prompt -d "$(pwd)" "your prompt here"
+```
+
+Concurrency is capped at 3 simultaneous calls (matches the no-scaled-automation rule). Session chaining via `--session-id` / `--session-out`. Full reference: [docs/external-prompt-api.md](docs/external-prompt-api.md).
+
 ## Worktree Setup
 Uses shared Cargo target: `~/.cargo/target/claude-terminal`
 

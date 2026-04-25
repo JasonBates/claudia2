@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use tauri::{ipc::Channel, AppHandle, Emitter, State};
 use tokio::time::{timeout, Duration};
 
+use super::external_session::{ExternalEvent, ExternalSession};
 use super::{cmd_debug_log, AppState};
 use crate::claude_process::{spawn_claude_process, ClaudeReceiver};
 use crate::events::ClaudeEvent;
@@ -146,6 +147,39 @@ pub async fn send_message(
     let sender_arc = state.sender.clone();
     let handle_arc = state.process_handle.clone();
 
+    // External-session capture — only on the first send_message after launch.
+    // If the launch-intent file specified a resultSocket, connect now and
+    // emit a `started` event. Subsequent send_message calls (interactive
+    // user input) leave the external session as None and skip mirroring.
+    let mut external_session: Option<ExternalSession> = {
+        let socket_path = {
+            let mut guard = state.result_socket_path.lock().await;
+            guard.take()
+        };
+        if let Some(path) = socket_path {
+            let mut session = ExternalSession::connect(&path).await;
+            if let Some(s) = session.as_mut() {
+                s.send(ExternalEvent::Started).await;
+            }
+            session
+        } else {
+            None
+        }
+    };
+
+    // Accumulator for assistant TextDelta events — joined and emitted in the
+    // final `done` event over the external session.
+    let mut accumulated_text: String = String::new();
+
+    // Captured Claude session ID (from any Ready event observed). Best-effort:
+    // Ready is emitted on bridge startup, so the auto-submit flow may not see
+    // one here — in which case we emit `done` with session_id: null.
+    let mut captured_session_id: Option<String> = None;
+
+    // If the bridge dies mid-prompt, we emit `error` instead of `done` so the
+    // caller can distinguish a clean completion from a crashed response.
+    let mut bridge_died = false;
+
     // Drain any stale events from previous response before sending new message
     // Forward Status events - they're important feedback (e.g., "Compacted")
     // If we find a Closed event, the bridge died after previous response - restart it
@@ -165,6 +199,9 @@ pub async fn send_message(
                     &event,
                     ClaudeEvent::Status { .. } | ClaudeEvent::Ready { .. }
                 ) {
+                    if let ClaudeEvent::Ready { session_id, .. } = &event {
+                        captured_session_id = Some(session_id.clone());
+                    }
                     cmd_debug_log("DRAIN", &format!("Forwarding event: {:?}", event));
                     let _ = channel.send(event);
                     forwarded += 1;
@@ -246,6 +283,9 @@ pub async fn send_message(
                 match timeout(Duration::from_millis(500), receiver.recv_event()).await {
                     Ok(Some(event)) => {
                         cmd_debug_log("RESTART", &format!("Event during warmup: {:?}", event));
+                        if let ClaudeEvent::Ready { session_id, .. } = &event {
+                            captured_session_id = Some(session_id.clone());
+                        }
                         if matches!(&event, ClaudeEvent::Ready { .. }) {
                             ready_received = true;
                             let _ = channel.send(event);
@@ -358,6 +398,17 @@ pub async fn send_message(
                     ClaudeEvent::TextDelta { .. } | ClaudeEvent::ToolStart { .. }
                 ) {
                     got_first_content = true;
+                }
+
+                // Mirror to external session: accumulate assistant text and
+                // capture session_id from any Ready event we see.
+                if external_session.is_some() {
+                    if let ClaudeEvent::TextDelta { text } = &event {
+                        accumulated_text.push_str(text);
+                    }
+                }
+                if let ClaudeEvent::Ready { session_id, .. } = &event {
+                    captured_session_id = Some(session_id.clone());
                 }
 
                 // Track thinking state for extended timeout during Opus 4.5 thinking
@@ -606,6 +657,7 @@ pub async fn send_message(
                     "LOOP",
                     "Channel returned None (closed) - clearing process state",
                 );
+                bridge_died = true;
                 drop(receiver_guard); // Release lock before acquiring others
                 {
                     let mut sender_guard = sender_arc.lock().await;
@@ -643,6 +695,41 @@ pub async fn send_message(
     }
 
     cmd_debug_log("DONE", &format!("Total events received: {}", event_count));
+
+    // External session: emit a final event and drop the writer.
+    // Runs at every loop-exit path (Done, Interrupted, channel closed, max idle,
+    // superseded by newer request) so the caller's read always returns either
+    // a `done`/`error` event or EOF — never silent.
+    if let Some(mut session) = external_session.take() {
+        if bridge_died {
+            cmd_debug_log(
+                "EXTERNAL",
+                "Bridge died mid-prompt — emitting error instead of done",
+            );
+            session
+                .send(ExternalEvent::Error {
+                    message: "Claude bridge process ended before the response completed",
+                    code: "process_died",
+                })
+                .await;
+        } else {
+            cmd_debug_log(
+                "EXTERNAL",
+                &format!(
+                    "Emitting done: text_len={}, session_id={:?}",
+                    accumulated_text.len(),
+                    captured_session_id
+                ),
+            );
+            session
+                .send(ExternalEvent::Done {
+                    text: &accumulated_text,
+                    session_id: captured_session_id.as_deref(),
+                })
+                .await;
+        }
+        // session drops here → socket closes → caller's read returns EOF.
+    }
 
     // Spawn background pump for late-arriving events
     // (e.g., background tasks completing after Done)

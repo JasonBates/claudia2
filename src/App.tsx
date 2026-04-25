@@ -13,7 +13,7 @@ import PlanApprovalBar from "./components/PlanApprovalBar";
 import PermissionDialog from "./components/PermissionDialog";
 import Sidebar from "./components/Sidebar";
 import ErrorFallback from "./components/ErrorFallback";
-import { sendMessage, resumeSession, getSessionHistory, clearSession, sendPermissionResponse, sendQuestionResponse, sendQuestionCancel, getSchemeColors, openInNewWindow, openNewWindowWithPicker, getConfig, saveConfig, checkForUpdate, downloadAndInstallUpdate, restartApp, getAppVersion, hasBotApiKey, listProjects, reopenInDirectory, getLaunchDir, hasCliDirectory, getPendingResume, checkClaudeCodeInstalled } from "./lib/tauri";
+import { sendMessage, resumeSession, getSessionHistory, clearSession, sendPermissionResponse, sendQuestionResponse, sendQuestionCancel, getSchemeColors, openInNewWindow, openNewWindowWithPicker, getConfig, saveConfig, checkForUpdate, downloadAndInstallUpdate, restartApp, getAppVersion, hasBotApiKey, listProjects, reopenInDirectory, getLaunchDir, hasCliDirectory, getPendingResume, getPendingPrompt, checkClaudeCodeInstalled } from "./lib/tauri";
 import type { ProjectInfo } from "./lib/tauri";
 import type { ThemeSettings } from "./lib/theme-utils";
 import { getContextThreshold, getContextLimit } from "./lib/context-utils";
@@ -1310,6 +1310,20 @@ function App() {
       } else {
         console.log("[MOUNT] Explicit CLI directory provided, skipping picker");
         await continueWithStartup();
+      }
+
+      // If the launch-intent file included a `prompt`, fire it now through
+      // the normal submit path so it appears as a regular user message.
+      // Runs after any --resume so the prompt lands on the resumed session.
+      try {
+        const pendingPrompt = await getPendingPrompt();
+        if (pendingPrompt) {
+          console.log("[MOUNT] Auto-submitting pending prompt (len=" + pendingPrompt.length + ")");
+          // Fire-and-forget: handleSubmit awaits internally. Don't block mount on it.
+          void handleSubmit(pendingPrompt);
+        }
+      } catch (err) {
+        console.error("[MOUNT] Failed to fetch pending prompt:", err);
       }
     } else {
       // Check how many projects exist to decide startup flow

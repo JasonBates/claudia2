@@ -134,6 +134,23 @@ pub fn get_pending_resume(state: tauri::State<'_, AppState>) -> Option<String> {
     state.resume_session_id.clone()
 }
 
+/// Consume the pending auto-submit prompt provided via the launch-intent file.
+///
+/// Returns the prompt text on first call (and clears it), `None` afterwards.
+/// The frontend calls this once on startup, after the session is fully ready,
+/// then routes the returned text through the normal `handleSubmit` path so
+/// the prompt appears as a regular user message in the transcript.
+///
+/// Wrapped in `Result` because Tauri's async command machinery requires it
+/// when the command takes a `State` reference.
+#[tauri::command]
+pub async fn get_pending_prompt(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let mut guard = state.pending_prompt.lock().await;
+    Ok(guard.take())
+}
+
 /// Close current window and open a new one in the specified directory.
 ///
 /// This effectively "reopens" the app in a different project by:

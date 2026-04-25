@@ -11,6 +11,7 @@ pub mod appearance_cmd;
 pub mod bot_config;
 pub mod config_cmd;
 pub mod directory_cmd;
+pub mod external_session;
 pub mod messaging;
 pub mod permission;
 pub mod project_list;
@@ -63,11 +64,27 @@ pub struct AppState {
     /// Reads late-arriving events (e.g., background task completions) between send_message calls
     /// and forwards them to the frontend via Tauri's global event system
     pub bg_pump_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+
+    /// Auto-submit prompt provided via launch-intent file. Consumed once on startup
+    /// by the frontend via `get_pending_prompt`, then cleared.
+    pub pending_prompt: Arc<Mutex<Option<String>>>,
+
+    /// Path to the result socket from the launch-intent file. send_message
+    /// takes() this on first call, connects to it, and mirrors events back
+    /// to the caller for the duration of that one prompt. Subsequent
+    /// interactive messages see None and skip mirroring.
+    pub result_socket_path: Arc<Mutex<Option<String>>>,
 }
 
 impl AppState {
-    /// Create new AppState with optional CLI-provided directory and resume session
-    pub fn new(cli_dir: Option<String>, resume_session_id: Option<String>) -> Self {
+    /// Create new AppState with optional CLI-provided directory, resume session,
+    /// auto-prompt, and result-socket path.
+    pub fn new(
+        cli_dir: Option<String>,
+        resume_session_id: Option<String>,
+        pending_prompt: Option<String>,
+        result_socket_path: Option<String>,
+    ) -> Self {
         // Track if a directory was explicitly provided (via CLI arg, env var, or --resume)
         // This is used to skip the project picker on reopen
         let has_cli_directory =
@@ -105,13 +122,15 @@ impl AppState {
             session_id,
             request_generation: AtomicU64::new(0),
             bg_pump_handle: Arc::new(Mutex::new(None)),
+            pending_prompt: Arc::new(Mutex::new(pending_prompt)),
+            result_socket_path: Arc::new(Mutex::new(result_socket_path)),
         }
     }
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::new(None, None)
+        Self::new(None, None, None, None)
     }
 }
 
