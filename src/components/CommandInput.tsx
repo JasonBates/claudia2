@@ -1,14 +1,14 @@
 import { Component, createSignal, onMount, onCleanup, For, Show } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import type { ImageAttachment } from "../lib/types";
+import type { FileAttachment, ImageAttachment } from "../lib/types";
 import { SUPPORTED_IMAGE_TYPES, MAX_IMAGE_SIZE_BYTES } from "../lib/types";
 
 type Mode = "auto" | "request" | "plan" | "bot";
 
 export interface CommandInputHandle {
   focus: () => void;
-  insertText: (text: string) => void;
+  addFileAttachment: (name: string, path: string) => void;
 }
 
 interface CommandInputProps {
@@ -29,6 +29,7 @@ const CommandInput: Component<CommandInputProps> = (props) => {
   const [historyIndex, setHistoryIndex] = createSignal(-1);
   const [draft, setDraft] = createSignal("");
   const [images, setImages] = createSignal<ImageAttachment[]>([]);
+  const [files, setFiles] = createSignal<FileAttachment[]>([]);
   const [imageError, setImageError] = createSignal<string | null>(null);
   let textareaRef: HTMLTextAreaElement | undefined;
   let activateDebounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -51,7 +52,7 @@ const CommandInput: Component<CommandInputProps> = (props) => {
   onMount(() => {
     focusInput();
     // Expose methods to parent via ref callback (synchronous)
-    props.ref?.({ focus: focusInput, insertText });
+    props.ref?.({ focus: focusInput, addFileAttachment });
     // Use Tauri's native window focus event instead of browser's window focus
     // The browser's window.focus event doesn't fire when the native window is activated
     const appWindow = getCurrentWindow();
@@ -129,30 +130,17 @@ const CommandInput: Component<CommandInputProps> = (props) => {
     setImages((prev) => prev.filter((img) => img.id !== id));
   };
 
-  const insertText = (text: string) => {
-    const current = value();
-    if (!textareaRef) {
-      setValue(current + text);
-      return;
-    }
-    const start = textareaRef.selectionStart;
-    const end = textareaRef.selectionEnd;
-    const before = current.slice(0, start);
-    const after = current.slice(end);
-    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before);
-    const needsTrailingSpace = after.length > 0 && !/^\s/.test(after);
-    const insertion = (needsLeadingSpace ? " " : "") + text + (needsTrailingSpace ? " " : "");
-    const newValue = before + insertion + after;
-    setValue(newValue);
+  const addFileAttachment = (name: string, path: string) => {
+    const attachment: FileAttachment = {
+      id: `file-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      name,
+      path,
+    };
+    setFiles((prev) => [...prev, attachment]);
+  };
 
-    const newCursor = start + insertion.length;
-    requestAnimationFrame(() => {
-      if (!textareaRef) return;
-      textareaRef.focus();
-      textareaRef.setSelectionRange(newCursor, newCursor);
-      textareaRef.style.height = "auto";
-      textareaRef.style.height = Math.min(textareaRef.scrollHeight, 200) + "px";
-    });
+  const removeFile = (id: string) => {
+    setFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
   const handlePaste = async (e: ClipboardEvent) => {
@@ -265,26 +253,33 @@ const CommandInput: Component<CommandInputProps> = (props) => {
   const submit = () => {
     const text = value().trim();
     const currentImages = images();
+    const currentFiles = files();
 
-    // Need either text or images
-    if (!text && currentImages.length === 0) return;
+    if (!text && currentImages.length === 0 && currentFiles.length === 0) return;
     if (props.disabled) return;
 
-    // Add to history (text only)
+    // Expand file chips into markdown links so Claude sees them in the message.
+    // Angle brackets keep the URL CommonMark-safe for paths with spaces.
+    const fileLinks = currentFiles.map((f) => `[${f.name}](<${f.path}>)`).join(" ");
+    const message = fileLinks
+      ? text
+        ? `${fileLinks}\n\n${text}`
+        : fileLinks
+      : text;
+
+    // History stores user-typed text only; file refs are ephemeral.
     if (text) {
       setHistory((prev) => [...prev.filter((h) => h !== text), text]);
     }
     setHistoryIndex(-1);
     setDraft("");
 
-    // Clear state
     setValue("");
     setImages([]);
+    setFiles([]);
 
-    // Submit with images
-    props.onSubmit(text, currentImages.length > 0 ? currentImages : undefined);
+    props.onSubmit(message, currentImages.length > 0 ? currentImages : undefined);
 
-    // Reset textarea height
     if (textareaRef) {
       textareaRef.style.height = "auto";
     }
@@ -317,6 +312,27 @@ const CommandInput: Component<CommandInputProps> = (props) => {
                   class="remove-btn"
                   onClick={() => removeImage(img.id)}
                   title="Remove image"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+
+      {/* File attachment chips */}
+      <Show when={files().length > 0}>
+        <div class="file-attachments">
+          <For each={files()}>
+            {(file) => (
+              <div class="file-chip" title={file.path}>
+                <span class="file-chip-icon">📄</span>
+                <span class="file-chip-name">{file.name}</span>
+                <button
+                  class="file-chip-remove"
+                  onClick={() => removeFile(file.id)}
+                  title="Remove file"
                 >
                   ×
                 </button>
