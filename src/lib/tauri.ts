@@ -549,6 +549,17 @@ export async function getPendingResume(): Promise<string | null> {
 }
 
 /**
+ * Consume the pending auto-submit prompt from the launch-intent file.
+ * Returns the prompt text on first call (and clears it), null afterwards.
+ * Called once on startup after the session is ready; the prompt is then
+ * routed through the normal submit path so it appears as a regular user
+ * message in the transcript.
+ */
+export async function getPendingPrompt(): Promise<string | null> {
+  return await invoke<string | null>("get_pending_prompt");
+}
+
+/**
  * Status of Claude Code CLI installation
  */
 export interface ClaudeCodeStatus {

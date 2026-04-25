@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""
+claudia-prompt — fire a prompt at Claudia2, get the assistant's reply on stdout.
+
+Drops a launch-intent file in ~/.claudia, listens on a Unix socket, spawns
+Claudia2, reads the streamed JSONL events until EOF, and prints the final
+assistant text.
+
+Concurrency cap: at most 3 simultaneous claudia-prompt invocations. Slot
+reservation uses PID-keyed slot files in ~/.claudia/slots/ guarded by flock,
+so dead callers free their slots automatically on the next invocation. The
+cap matches the "no Claude Code automation at scale" rule — a guardrail on
+the supported entrypoint, not a security boundary.
+
+Usage:
+    claudia-prompt --directory /path/to/project "your prompt here"
+    claudia-prompt -d /path "prompt" --timeout 600
+    claudia-prompt -d /path "prompt" --raw       # emit JSONL events on stdout
+
+Exit codes:
+    0  — success, assistant text on stdout
+    1  — runtime error (connect failed, app errored, etc.)
+    2  — at concurrency limit (try again later)
+    3  — timeout waiting for response
+    130 — interrupted (SIGINT/SIGTERM)
+"""
+
+from __future__ import annotations
+
+import argparse
+import atexit
+import fcntl
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+MAX_CONCURRENT = 3
+CLAUDIA_DIR = Path.home() / ".claudia"
+SLOTS_DIR = CLAUDIA_DIR / "slots"
+LOCK_FILE = SLOTS_DIR / ".lock"
+
+# How long to wait for Claudia to connect to our socket after spawning. Cold
+# launch + first paint takes a few seconds; release builds with bridge warmup
+# can stretch further on the first run after a reboot.
+DEFAULT_CONNECT_TIMEOUT = 60
+
+# How long to wait for the full response after Claudia connects. Long-running
+# prompts with multiple tool calls can blow past 5 minutes — caller can override.
+DEFAULT_RESPONSE_TIMEOUT = 600
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def claim_slot() -> Path:
+    """Reserve one of MAX_CONCURRENT slots or exit with code 2."""
+    SLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    lock_fd = open(LOCK_FILE, "w")
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    try:
+        # Sweep: any *.slot file whose PID is no longer alive is stale.
+        alive = []
+        for f in SLOTS_DIR.glob("*.slot"):
+            try:
+                pid = int(f.stem)
+            except ValueError:
+                f.unlink(missing_ok=True)
+                continue
+            if pid_alive(pid):
+                alive.append(f)
+            else:
+                f.unlink(missing_ok=True)
+
+        if len(alive) >= MAX_CONCURRENT:
+            print(
+                f"claudia-prompt: at concurrency limit ({len(alive)}/{MAX_CONCURRENT} running). "
+                f"Try again when one finishes.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        slot = SLOTS_DIR / f"{os.getpid()}.slot"
+        slot.write_text(datetime.now(timezone.utc).isoformat())
+        return slot
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
+
+def install_cleanup(slot: Path, sock_path: str, intent_path: Path) -> None:
+    """Free our slot and remove temp files on any exit path."""
+
+    def cleanup() -> None:
+        slot.unlink(missing_ok=True)
+        intent_path.unlink(missing_ok=True)
+        try:
+            os.unlink(sock_path)
+        except FileNotFoundError:
+            pass
+
+    atexit.register(cleanup)
+
+    def on_signal(signum: int, _frame: object) -> None:
+        cleanup()
+        # 128 + signum is the conventional "killed by signal" exit code.
+        sys.exit(130 if signum == signal.SIGINT else 128 + signum)
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(sig, on_signal)
+        except (ValueError, OSError):
+            pass
+
+
+def find_claudia_app() -> str:
+    """Locate the Claudia2 app bundle for `open -a`."""
+    candidates = [
+        "/Applications/Claudia2.app",
+        str(Path.home() / "Applications" / "Claudia2.app"),
+    ]
+    for c in candidates:
+        if Path(c).exists():
+            return c
+    return "Claudia2"
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="claudia-prompt",
+        description="Fire a prompt at Claudia2 and capture the assistant's reply.",
+    )
+    p.add_argument("prompt", help="The prompt text to submit.")
+    p.add_argument(
+        "-d",
+        "--directory",
+        required=True,
+        help="Working directory for the Claudia session (project root).",
+    )
+    p.add_argument(
+        "--connect-timeout",
+        type=float,
+        default=DEFAULT_CONNECT_TIMEOUT,
+        help=f"Seconds to wait for Claudia to connect (default: {DEFAULT_CONNECT_TIMEOUT}).",
+    )
+    p.add_argument(
+        "--response-timeout",
+        type=float,
+        default=DEFAULT_RESPONSE_TIMEOUT,
+        help=f"Seconds to wait for the response after connect (default: {DEFAULT_RESPONSE_TIMEOUT}).",
+    )
+    p.add_argument(
+        "--raw",
+        action="store_true",
+        help="Emit raw JSONL events on stdout instead of the final text.",
+    )
+    p.add_argument(
+        "--session-out",
+        metavar="PATH",
+        help="If provided, write the Claude session_id (when known) to this file.",
+    )
+    p.add_argument(
+        "--session-id",
+        metavar="ID",
+        help="Resume an existing Claude session by ID before submitting the prompt. "
+             "Pair with --session-out from a prior call to chain prompts.",
+    )
+    return p.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+
+    directory = str(Path(args.directory).expanduser().resolve())
+    if not Path(directory).is_dir():
+        print(f"claudia-prompt: directory not found: {directory}", file=sys.stderr)
+        return 1
+
+    CLAUDIA_DIR.mkdir(parents=True, exist_ok=True)
+    slot = claim_slot()
+
+    # 1. Listen on a Unix socket. Caller is the server; the app connects.
+    run_id = uuid.uuid4().hex[:12]
+    sock_path = str(Path(tempfile.gettempdir()) / f"claudia-{run_id}.sock")
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(sock_path)
+    srv.listen(1)
+
+    intent_path = CLAUDIA_DIR / f"pending-launch-{run_id}.json"
+    install_cleanup(slot, sock_path, intent_path)
+
+    # 2. Drop the launch-intent file. Timestamp must be recent (30s window).
+    intent = {
+        "directory": directory,
+        "prompt": args.prompt,
+        "resultSocket": sock_path,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if args.session_id:
+        intent["sessionId"] = args.session_id
+    intent_path.write_text(json.dumps(intent))
+
+    # 3. Spawn Claudia. `open -a` returns immediately; the app reads the
+    #    intent file in its setup hook, opens a window, runs the prompt,
+    #    connects to our socket as a client.
+    app_path = find_claudia_app()
+    try:
+        subprocess.Popen(
+            ["open", "-a", app_path, "--args", directory],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as e:
+        print(f"claudia-prompt: failed to spawn Claudia2: {e}", file=sys.stderr)
+        return 1
+
+    # 4. Wait for the app to connect.
+    srv.settimeout(args.connect_timeout)
+    try:
+        conn, _ = srv.accept()
+    except socket.timeout:
+        print(
+            f"claudia-prompt: timed out waiting for Claudia2 to connect "
+            f"({args.connect_timeout}s). Is the app running and Claude Code installed?",
+            file=sys.stderr,
+        )
+        return 3
+
+    conn.settimeout(args.response_timeout)
+
+    # 5. Read JSONL events until EOF. Track the last-known session_id and
+    #    the final `done` payload.
+    final_text: str | None = None
+    final_session_id: str | None = None
+    error_message: str | None = None
+    deadline = time.monotonic() + args.response_timeout
+
+    with conn.makefile("rb") as r:
+        for line in r:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                error_message = f"response timeout after {args.response_timeout}s"
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                # Malformed line — surface in --raw mode, otherwise skip.
+                if args.raw:
+                    sys.stdout.buffer.write(line + b"\n")
+                    sys.stdout.flush()
+                continue
+
+            if args.raw:
+                sys.stdout.write(json.dumps(ev) + "\n")
+                sys.stdout.flush()
+
+            t = ev.get("type")
+            if t == "started":
+                continue
+            if t == "done":
+                final_text = ev.get("text", "")
+                final_session_id = ev.get("session_id")
+                break
+            if t == "error":
+                error_message = ev.get("message", "unknown error")
+                break
+
+    if args.session_out and final_session_id:
+        try:
+            Path(args.session_out).write_text(final_session_id)
+        except OSError as e:
+            print(f"claudia-prompt: failed to write --session-out: {e}", file=sys.stderr)
+
+    if error_message:
+        print(f"claudia-prompt: {error_message}", file=sys.stderr)
+        return 1
+
+    if final_text is None:
+        print(
+            "claudia-prompt: socket closed before `done` event arrived "
+            "(window may have been closed, or the app crashed)",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not args.raw:
+        sys.stdout.write(final_text)
+        if not final_text.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

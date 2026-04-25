@@ -138,6 +138,7 @@ async function main() {
   let respawnCount = 0;      // Rate-limit unexpected respawns
   let respawnWindowStart = Date.now();
   let isWarmingUp = false;   // Suppress events during warmup
+  let userInputSeen = false; // True once any user message has been forwarded — used to skip warmup if the user beat the 100ms timer
   let extended1mEnabled = false; // Track 1M context window toggle (via /1m command)
   let currentToolId = null;  // Track current tool ID for tool_result matching
   let currentToolName = null; // Track current tool name for subagent detection
@@ -2547,8 +2548,18 @@ async function main() {
   spawnClaude();
 
   // Warmup: Send a /status command to trigger Claude's init immediately
-  // This way Claude is ready by the time the user types their first message
+  // This way Claude is ready by the time the user types their first message.
+  //
+  // External-prompt API (claudia-prompt) auto-submits a real user message
+  // within milliseconds of bridge spawn — well inside this 100ms window.
+  // If that happens, skip warmup entirely; otherwise the warmup-end logic
+  // ("first result is the warmup result, suppress it") would silently eat
+  // the user's actual first response.
   setTimeout(() => {
+    if (userInputSeen) {
+      debugLog("WARMUP", "Skipping warmup: user input already forwarded");
+      return;
+    }
     if (claude && claude.stdin.writable) {
       debugLog("WARMUP", "Sending /status to trigger Claude init");
       isWarmingUp = true;
@@ -2567,6 +2578,15 @@ async function main() {
     debugLog("INPUT_RAW", line);
     const input = line.trim();
     if (!input) return;
+
+    // Mark that real user input has arrived. Flips the warmup setTimeout
+    // into a no-op if it hasn't fired yet — see comment near the warmup
+    // setTimeout for why this matters for the external-prompt API.
+    // Only `__MSG__` represents a real user message; JSON control inputs
+    // (interrupt, permission responses, etc.) shouldn't suppress warmup.
+    if (input.startsWith("__MSG__")) {
+      userInputSeen = true;
+    }
 
     // Check for interrupt signal
     if (input.startsWith("{")) {

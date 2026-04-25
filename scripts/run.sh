@@ -72,7 +72,16 @@ run_build() {
     fi
 
     check_deps
-    npm run tauri build
+    # Tauri's updater bundling errors out if TAURI_SIGNING_PRIVATE_KEY isn't
+    # set, but it does this AFTER the .app and .dmg bundles are written.
+    # Tolerate the trailing error and verify the bundle directly — otherwise
+    # `set -e` aborts before run_install's cp can run.
+    npm run tauri build || true
+
+    if [ ! -d "$APP_BUNDLE" ]; then
+        echo -e "${RED}ERROR: build did not produce app bundle at $APP_BUNDLE${NC}"
+        exit 1
+    fi
 
     echo ""
     echo -e "${GREEN}Build complete!${NC}"
