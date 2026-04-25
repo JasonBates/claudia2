@@ -3,7 +3,7 @@ import { batch, runWithOwner } from "solid-js";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emitTo, listen } from "@tauri-apps/api/event";
-import { readFile, readTextFile } from "@tauri-apps/plugin-fs";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 import MessageList from "./components/MessageList";
 import CommandInput, { CommandInputHandle } from "./components/CommandInput";
 import TodoPanel from "./components/TodoPanel";
@@ -1007,67 +1007,19 @@ function App() {
   // Background event listener unlisten function
   let unlistenBgEvent: (() => void) | undefined;
 
-  // Helper to get media type from file extension
-  const getMediaTypeFromPath = (path: string): string | null => {
-    const ext = path.split(".").pop()?.toLowerCase();
-    switch (ext) {
-      case "jpg":
-      case "jpeg":
-        return "image/jpeg";
-      case "png":
-        return "image/png";
-      case "gif":
-        return "image/gif";
-      case "webp":
-        return "image/webp";
-      default:
-        return null;
-    }
-  };
-
-  // Handle file drop from Tauri's native drag/drop API
+  // Handle file drop from Tauri's native drag/drop API.
+  // Inserts each dropped file's path into the input as a markdown link, so
+  // Claude can pick it up via the Read tool. Path is wrapped in angle brackets
+  // for CommonMark compliance with spaces and special characters.
   const handleTauriFileDrop = async (paths: string[]) => {
-    if (!commandInputRef) {
-      console.log("[TAURI DROP] No commandInputRef");
-      return;
-    }
+    if (!commandInputRef || paths.length === 0) return;
 
-    console.log("[TAURI DROP] Processing", paths.length, "files");
+    const links = paths.map((path) => {
+      const basename = path.split("/").pop() || path;
+      return `[${basename}](<${path}>)`;
+    });
 
-    for (const path of paths) {
-      const mediaType = getMediaTypeFromPath(path);
-      if (!mediaType) {
-        console.log("[TAURI DROP] Skipping non-image:", path);
-        continue;
-      }
-
-      console.log("[TAURI DROP] Loading image:", path);
-
-      try {
-        console.log("[TAURI DROP] Calling readFile for:", path);
-        // Read file as binary using Tauri's fs plugin
-        const fileData = await readFile(path);
-        console.log("[TAURI DROP] File read, size:", fileData.byteLength);
-
-        // Create a File-like object to pass to addImageFile
-        const fileName = path.split("/").pop() || "image";
-        const blob = new Blob([fileData], { type: mediaType });
-        const file = new File([blob], fileName, { type: mediaType });
-        console.log("[TAURI DROP] Created File object:", file.name, file.type, file.size);
-
-        await commandInputRef.addImageFile(file);
-        console.log("[TAURI DROP] addImageFile completed");
-      } catch (err) {
-        console.error("[TAURI DROP] Error reading file:", path, err);
-        // Log more details about the error
-        if (err instanceof Error) {
-          console.error("[TAURI DROP] Error message:", err.message);
-          console.error("[TAURI DROP] Error stack:", err.stack);
-        }
-      }
-    }
-
-    // Focus the input after dropping
+    commandInputRef.insertText(links.join(" "));
     commandInputRef.focus();
   };
 
