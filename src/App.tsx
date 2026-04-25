@@ -1008,18 +1008,17 @@ function App() {
   let unlistenBgEvent: (() => void) | undefined;
 
   // Handle file drop from Tauri's native drag/drop API.
-  // Inserts each dropped file's path into the input as a markdown link, so
-  // Claude can pick it up via the Read tool. Path is wrapped in angle brackets
-  // for CommonMark compliance with spaces and special characters.
+  // Each dropped file becomes an attachment chip in the input; on submit the
+  // chips are expanded into CommonMark markdown links so Claude can read them
+  // via the Read tool.
   const handleTauriFileDrop = async (paths: string[]) => {
     if (!commandInputRef || paths.length === 0) return;
 
-    const links = paths.map((path) => {
+    for (const path of paths) {
       const basename = path.split("/").pop() || path;
-      return `[${basename}](<${path}>)`;
-    });
+      commandInputRef.addFileAttachment(basename, path);
+    }
 
-    commandInputRef.insertText(links.join(" "));
     commandInputRef.focus();
   };
 

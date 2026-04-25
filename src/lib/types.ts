@@ -132,6 +132,16 @@ export interface ImageAttachment {
 }
 
 /**
+ * A file attachment carried by reference (path only).
+ * Expanded into a markdown link in the submitted message.
+ */
+export interface FileAttachment {
+  id: string;
+  name: string;
+  path: string;
+}
+
+/**
  * Supported image formats for Claude API.
  */
 export const SUPPORTED_IMAGE_TYPES = [

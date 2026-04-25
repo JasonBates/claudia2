@@ -2167,6 +2167,63 @@ del {
   background: rgba(220, 50, 47, 0.9); /* Solarized red */
 }
 
+/* File Attachment Chips */
+.file-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 8px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  font-size: 12px;
+  max-width: 240px;
+}
+
+.file-chip-icon {
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.file-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-chip-remove {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.file-chip-remove:hover {
+  opacity: 1;
+  background: rgba(220, 50, 47, 0.9);
+  color: white;
+}
+
 /* Image Error Message */
 .image-error {
   color: var(--red);
