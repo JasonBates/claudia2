@@ -68,9 +68,6 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Bundle bridge resources
-        run: npm run bundle:bridge
-
       - name: Run Rust tests
         working-directory: src-tauri
         run: cargo test
