@@ -212,13 +212,18 @@ def main() -> int:
         intent["sessionId"] = args.session_id
     intent_path.write_text(json.dumps(intent))
 
-    # 3. Spawn Claudia. `open -a` returns immediately; the app reads the
-    #    intent file in its setup hook, opens a window, runs the prompt,
-    #    connects to our socket as a client.
+    # 3. Spawn Claudia. The `-n` flag forces a *new* instance even when one
+    #    is already running. Without it, macOS would just foreground the
+    #    existing window and the new intent file would never be read (the
+    #    setup hook only runs once per process). Tauri doesn't use the
+    #    single-instance plugin here, so multiple windows coexist fine.
+    #    `open` returns immediately; the new instance reads the intent file
+    #    in its setup hook, opens its window, runs the prompt, and connects
+    #    back to our socket as a client.
     app_path = find_claudia_app()
     try:
         subprocess.Popen(
-            ["open", "-a", app_path, "--args", directory],
+            ["open", "-n", "-a", app_path, "--args", directory],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

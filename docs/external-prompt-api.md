@@ -164,7 +164,7 @@ For `--raw` mode, the agent receives JSONL on stdout — useful when surfacing t
 
 ## Failure modes worth knowing
 
-- **App already running.** `open -a Claudia2.app` against a running instance just foregrounds it; macOS doesn't relaunch a running app to apply new `--args`. The intent file gets written but the running window's setup hook already ran, so the prompt is never picked up. Wrapper times out at `--connect-timeout`. Workaround: quit the running window, or use a fresh window per call (the design assumes new-window-per-call).
+- **Concurrent calls can race on the intent file.** The setup hook reads ALL `~/.claudia/pending-launch-*.json` files, picks the freshest, deletes them all. Two wrappers firing within milliseconds means one window starts with no intent and never auto-submits — the losing wrapper times out at `--connect-timeout`. The 3-slot cap makes this rare in practice but possible. A future fix could pass an explicit intent ID via `--args` so each window matches only its own file.
 - **Project picker.** If `directory` resolves to a path Claudia2 doesn't know about and there are multiple projects, the picker shows on startup. The auto-submit only fires after the picker is dismissed (or skipped via the `wasExplicitlyLaunched` path, which the intent file's `directory` field triggers).
 - **Bridge warmup race.** Historically, the bridge's 100ms startup warmup (`/status` priming) could swallow an auto-submitted prompt's response. Fixed in `sdk-bridge-v2.mjs` via the `userInputSeen` flag — warmup is skipped when a real `__MSG__` arrives in the first 100ms.
 
