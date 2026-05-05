@@ -776,7 +776,7 @@ describe("Event Dispatch Functions", () => {
   });
 
   describe("background task handlers", () => {
-    it("should not attach bg_task_registered to original Task tool cards", () => {
+    it("should track bg_task_registered internally without adding visible messages", () => {
       const ctx = createMockContext();
 
       handleBgTaskRegistered(
@@ -790,7 +790,44 @@ describe("Event Dispatch Functions", () => {
         ctx
       );
 
+      expect(ctx.refs.bgPendingFinalTaskKeysRef?.current.has("task-123")).toBe(true);
       expect(ctx.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("should release a registered background task on subagent_end safety net", () => {
+      const ctx = createMockContext();
+
+      handleBgTaskRegistered(
+        {
+          type: "bg_task_registered",
+          taskId: "task-safe",
+          toolUseId: "tool-safe",
+          agentType: "Explore",
+          description: "Investigate",
+        },
+        ctx
+      );
+
+      (ctx.dispatch as ReturnType<typeof vi.fn>).mockClear();
+
+      handleSubagentEnd(
+        {
+          type: "subagent_end",
+          id: "tool-safe",
+          agentType: "Explore",
+          duration: 120000,
+          toolCount: 0,
+          result: "",
+        },
+        ctx
+      );
+
+      expect(ctx.refs.bgPendingFinalTaskKeysRef?.current.has("task-safe")).toBe(false);
+      expect(ctx.dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "ADD_MESSAGE",
+        })
+      );
     });
 
     it("should keep bg_task_completed in task output message without queueing tool updates", () => {

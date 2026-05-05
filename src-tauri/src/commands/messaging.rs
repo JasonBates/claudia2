@@ -112,6 +112,29 @@ pub fn calculate_timeouts(
     (timeout_ms, max_idle)
 }
 
+fn is_background_drain_forward_event(event: &ClaudeEvent) -> bool {
+    matches!(
+        event,
+        ClaudeEvent::TextDelta { .. }
+            | ClaudeEvent::ThinkingStart { .. }
+            | ClaudeEvent::ThinkingDelta { .. }
+            | ClaudeEvent::ToolStart { .. }
+            | ClaudeEvent::ToolInput { .. }
+            | ClaudeEvent::ToolPending
+            | ClaudeEvent::ToolResult { .. }
+            | ClaudeEvent::BlockEnd
+            | ClaudeEvent::ContextUpdate { .. }
+            | ClaudeEvent::Done
+            | ClaudeEvent::Interrupted
+            | ClaudeEvent::SubagentEnd { .. }
+            | ClaudeEvent::SubagentProgress { .. }
+            | ClaudeEvent::SubagentStart { .. }
+            | ClaudeEvent::BgTaskRegistered { .. }
+            | ClaudeEvent::BgTaskCompleted { .. }
+            | ClaudeEvent::BgTaskResult { .. }
+    )
+}
+
 /// Send a message to Claude and stream the response
 /// Uses split sender/receiver locks for responsive control commands (permissions, interrupts)
 #[tauri::command]
@@ -205,17 +228,10 @@ pub async fn send_message(
                     cmd_debug_log("DRAIN", &format!("Forwarding event: {:?}", event));
                     let _ = channel.send(event);
                     forwarded += 1;
-                } else if matches!(
-                    &event,
-                    ClaudeEvent::SubagentEnd { .. }
-                        | ClaudeEvent::SubagentProgress { .. }
-                        | ClaudeEvent::SubagentStart { .. }
-                        | ClaudeEvent::BgTaskRegistered { .. }
-                        | ClaudeEvent::BgTaskCompleted { .. }
-                        | ClaudeEvent::BgTaskResult { .. }
-                ) {
-                    // Forward subagent events via global emit (background task completions
-                    // that arrived between pump abort and drain)
+                } else if is_background_drain_forward_event(&event) {
+                    // Forward late background-turn events via global emit instead
+                    // of draining them. Otherwise, a user prompt submitted while
+                    // a background agent is reporting back can erase that response.
                     cmd_debug_log("DRAIN", &format!("Forwarding bg event: {:?}", event));
                     let _ = app.emit("claude-bg-event", &event);
                     forwarded += 1;
@@ -799,6 +815,59 @@ pub async fn send_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -------------------------------------------------------------------------
+    // background drain forwarding
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn drain_forwards_late_background_response_events() {
+        assert!(is_background_drain_forward_event(&ClaudeEvent::TextDelta {
+            text: "late response".to_string(),
+        }));
+        assert!(is_background_drain_forward_event(&ClaudeEvent::ToolStart {
+            id: "tool-1".to_string(),
+            name: "Bash".to_string(),
+            parent_tool_use_id: None,
+        }));
+        assert!(is_background_drain_forward_event(&ClaudeEvent::Done));
+        assert!(is_background_drain_forward_event(&ClaudeEvent::BgTaskResult {
+            task_id: "task-1".to_string(),
+            tool_use_id: Some("tool-1".to_string()),
+            result: "final output".to_string(),
+            status: "completed".to_string(),
+            agent_type: "Explore".to_string(),
+            duration: 100,
+            tool_count: 1,
+        }));
+    }
+
+    #[test]
+    fn drain_does_not_forward_session_control_events_as_background_responses() {
+        assert!(!is_background_drain_forward_event(&ClaudeEvent::Status {
+            message: "Compacted".to_string(),
+            is_compaction: Some(true),
+            pre_tokens: Some(100),
+            post_tokens: Some(50),
+        }));
+        assert!(!is_background_drain_forward_event(&ClaudeEvent::Ready {
+            session_id: "session-1".to_string(),
+            model: "claude".to_string(),
+            tools: 1,
+        }));
+        assert!(!is_background_drain_forward_event(&ClaudeEvent::Closed { code: 1 }));
+        assert!(!is_background_drain_forward_event(&ClaudeEvent::Result {
+            content: "duplicate fallback content".to_string(),
+            cost: 0.0,
+            duration: 0,
+            turns: 1,
+            is_error: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read: 0,
+            cache_write: 0,
+        }));
+    }
 
     // -------------------------------------------------------------------------
     // calculate_timeouts - State Priority Tests

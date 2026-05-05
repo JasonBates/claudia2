@@ -715,6 +715,14 @@ function upsertBackgroundResultMessage(
   }
 }
 
+function markBackgroundTaskPending(taskKey: string, ctx: EventContext): void {
+  if (!taskKey || isBackgroundTaskFinalized(taskKey, ctx)) return;
+  const pendingSet = ctx.refs.bgPendingFinalTaskKeysRef?.current;
+  if (!pendingSet) return;
+
+  pendingSet.add(taskKey);
+}
+
 function resolveBackgroundTaskKey(
   taskId: string,
   toolUseId: string | undefined,
@@ -808,7 +816,10 @@ function markBackgroundTaskFinalized(taskKey: string, ctx: EventContext): void {
   const finalizedSet = ctx.refs.bgFinalizedTaskIdsRef?.current;
   const finalizedOrder = ctx.refs.bgFinalizedTaskOrderRef?.current;
   const pendingSet = ctx.refs.bgPendingFinalTaskKeysRef?.current;
-  if (!finalizedSet) return;
+  if (!finalizedSet) {
+    pendingSet?.delete(taskKey);
+    return;
+  }
 
   pendingSet?.delete(taskKey);
 
@@ -844,7 +855,8 @@ export function handleBgTaskRegistered(
   const taskId = event.taskId || "";
   const toolUseId = event.toolUseId;
   rememberBackgroundTaskToolMapping(taskId, toolUseId, ctx);
-  resolveBackgroundTaskKey(taskId, toolUseId, ctx);
+  const taskKey = resolveBackgroundTaskKey(taskId, toolUseId, ctx);
+  markBackgroundTaskPending(taskKey, ctx);
 }
 
 /**
@@ -862,7 +874,7 @@ export function handleBgTaskCompleted(
   // Always surface completion notifications per task, even if no later
   // bg_task_result arrives for that task.
   if (taskKey && !isBackgroundTaskFinalized(taskKey, ctx)) {
-    ctx.refs.bgPendingFinalTaskKeysRef?.current.add(taskKey);
+    markBackgroundTaskPending(taskKey, ctx);
     const completionText = summary || "Background task completed.";
     upsertBackgroundResultMessage(
       taskKey,
@@ -1032,6 +1044,10 @@ export function handleSubagentEnd(event: NormalizedSubagentEndEvent, ctx: EventC
     });
   }
 
+  const taskKey = resolveBackgroundTaskKey("", taskId, ctx);
+  if (taskKey && ctx.refs.bgPendingFinalTaskKeysRef?.current.has(taskKey)) {
+    markBackgroundTaskFinalized(taskKey, ctx);
+  }
 }
 
 // =============================================================================
