@@ -22,6 +22,7 @@ import { useStore, createEventDispatcher, actions, resetStreamingRefs } from "./
 import { normalizeClaudeEvent } from "./lib/claude-event-normalizer";
 import type { ClaudeEvent } from "./lib/tauri";
 import type { ImageAttachment } from "./lib/types";
+import { createBackgroundResponseHandler } from "./lib/background-response";
 import {
   useSession,
   usePermissions,
@@ -61,6 +62,11 @@ function App() {
   // ============================================================================
 
   const store = useStore();
+
+  const backgroundResponse = createBackgroundResponseHandler({
+    dispatch: store.dispatch,
+    generateMessageId: store.generateMessageId,
+  });
 
   // ============================================================================
   // Hooks (for behavior, not state)
@@ -379,10 +385,6 @@ function App() {
   const contextThreshold = () => {
     const used = store.sessionInfo().totalContext || 0;
     return getContextThreshold(used, contextLimit());
-  };
-
-  const hasPendingBackgroundResults = () => {
-    return (store.refs.bgPendingFinalTaskKeysRef?.current.size || 0) > 0;
   };
 
   // ============================================================================
@@ -774,6 +776,15 @@ function App() {
     store.dispatch(actions.resetStreaming());
     store.dispatch(actions.exitPlanning());
     resetStreamingRefs(store.refs);
+    store.refs.bgTaskToToolUseIdRef?.current.clear();
+    store.refs.bgTaskAliasToCanonicalRef?.current.clear();
+    store.refs.bgPendingFinalTaskKeysRef?.current.clear();
+    store.refs.pendingBgTaskCompletionsRef?.current.clear();
+    store.refs.pendingBgTaskResultsRef?.current.clear();
+    store.refs.bgResultMessageIdsRef?.current.clear();
+    store.refs.bgFinalizedTaskIdsRef?.current.clear();
+    store.refs.bgFinalizedTaskOrderRef?.current.splice(0);
+    backgroundResponse.reset();
     store.dispatch(actions.setSessionError(null));
   };
 
@@ -873,8 +884,6 @@ function App() {
 
   // Main message submission handler
   const handleSubmit = async (text: string, images?: ImageAttachment[]) => {
-    if (hasPendingBackgroundResults()) return;
-
     // Only process local commands for text-only messages
     if (!images && await localCommands.dispatch(text)) {
       return;
@@ -1216,7 +1225,8 @@ function App() {
 
     // Listen for background events (late-arriving subagent completions, etc.)
     // These arrive via Tauri's global event system from the background pump in Rust.
-    // handleEvent dispatches to event handlers which update both tool state and agent tracker.
+    // Stream-like bg events are rendered into dedicated assistant messages;
+    // lifecycle/status events still go through the central event dispatcher.
     try {
       unlistenBgEvent = await listen<ClaudeEvent>("claude-bg-event", (tauriEvent) => {
         const event = tauriEvent.payload;
@@ -1225,10 +1235,18 @@ function App() {
         if (owner) {
           runWithOwner(owner, () => {
             batch(() => {
+              const normalized = normalizeClaudeEvent(event);
+              if (backgroundResponse.handle(normalized)) {
+                return;
+              }
               handleEvent(event);
             });
           });
         } else {
+          const normalized = normalizeClaudeEvent(event);
+          if (backgroundResponse.handle(normalized)) {
+            return;
+          }
           handleEvent(event);
         }
       });
@@ -1516,17 +1534,14 @@ function App() {
             }}
             disabled={
               !store.sessionActive() ||
-              hasPendingBackgroundResults() ||
               (store.isLoading() && !store.planReady())
             }
             placeholder={
-              hasPendingBackgroundResults()
-                ? "Waiting for background task output..."
-                : store.isPlanning() && planWindowOpen()
-                  ? "How can I improve the plan?"
-                  : store.sessionActive()
-                    ? "Type a message..."
-                    : ""
+              store.isPlanning() && planWindowOpen()
+                ? "How can I improve the plan?"
+                : store.sessionActive()
+                  ? "Type a message..."
+                  : ""
             }
             mode={currentMode()}
             onModeChange={cycleMode}

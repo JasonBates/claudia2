@@ -52,7 +52,7 @@ export function resetStreamingRefs(refs: StreamingRefs): void {
   // Keep bgTaskToToolUseIdRef and pending bg task maps across turns because
   // background task events can arrive long after foreground streaming ends.
   // Keep bgTaskAliasToCanonicalRef/bgPendingFinalTaskKeysRef across turns to
-  // correlate late bg_task_result events and lock input until final output arrives.
+  // correlate late bg_task_result events without blocking new user input.
   // Keep bgResultMessageIdsRef across turns so later updates for the same
   // background task can replace the existing message instead of duplicating.
   // Keep bgFinalizedTaskIdsRef across turns so late completion summaries do not
