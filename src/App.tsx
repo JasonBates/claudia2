@@ -541,7 +541,9 @@ function App() {
   // Handle question panel answer
   const handleQuestionAnswer = async (answers: QuestionAnswers) => {
     const requestId = store.questionRequestId();
-    const questions = store.pendingQuestions();
+    // Snapshot before dispatch: the store uses reconcile, which empties this
+    // array in place when CLEAR_QUESTION_PANEL sets pending to [].
+    const questions = [...store.pendingQuestions()];
 
     store.dispatch(actions.clearQuestionPanel());
 
