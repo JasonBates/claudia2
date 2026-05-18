@@ -116,6 +116,7 @@ function createMockSidebar(): UseSidebarReturn {
     isLoading,
     error,
     loadSessions: vi.fn(),
+    loadSessionNames: vi.fn(),
     handleDeleteSession: vi.fn(),
     handleRenameSession: vi.fn(),
   };
