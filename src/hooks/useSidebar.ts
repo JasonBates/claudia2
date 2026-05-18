@@ -33,6 +33,7 @@ export interface UseSidebarReturn {
 
   // Actions
   loadSessions: () => Promise<void>;
+  loadSessionNames: () => Promise<void>;
   handleDeleteSession: (sessionId: string) => Promise<void>;
   handleRenameSession: (sessionId: string, name: string) => Promise<void>;
 }
@@ -227,6 +228,7 @@ export function useSidebar(options: UseSidebarOptions): UseSidebarReturn {
 
     // Actions
     loadSessions,
+    loadSessionNames,
     handleDeleteSession,
     handleRenameSession,
   };

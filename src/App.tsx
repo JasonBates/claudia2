@@ -132,6 +132,70 @@ function App() {
   // Force scroll to bottom when user sends a new message
   const [forceScroll, setForceScroll] = createSignal(false);
 
+  // Editable conversation title in the top bar
+  const [editingTitle, setEditingTitle] = createSignal(false);
+  const [titleDraft, setTitleDraft] = createSignal("");
+  // Holds a title set before a session ID is available (i.e. before the first
+  // message has been sent). Flushed to handleRenameSession once the session
+  // ID arrives.
+  const [pendingCustomTitle, setPendingCustomTitle] = createSignal<string | null>(null);
+  let titleInputRef: HTMLInputElement | undefined;
+
+  const currentSessionIdForTitle = (): string | null =>
+    store.sessionInfo().sessionId ?? store.launchSessionId();
+
+  const workingDirBasename = (): string => {
+    const wd = session.workingDir();
+    if (!wd) return "";
+    return wd.split("/").pop() || wd;
+  };
+
+  const effectiveTitle = (): string => {
+    const sid = currentSessionIdForTitle();
+    const customName = sid ? sidebar.sessionNames()[sid] : undefined;
+    if (customName && customName.trim()) return customName;
+    const pending = pendingCustomTitle();
+    if (pending && pending.trim()) return pending;
+    return workingDirBasename();
+  };
+
+  const beginEditTitle = () => {
+    setTitleDraft(effectiveTitle());
+    setEditingTitle(true);
+    queueMicrotask(() => {
+      titleInputRef?.focus();
+      titleInputRef?.select();
+    });
+  };
+
+  const cancelTitleEdit = () => {
+    setEditingTitle(false);
+  };
+
+  const commitTitleEdit = () => {
+    if (!editingTitle()) return;
+    const draft = titleDraft().trim();
+    const nameToSet = draft === "" || draft === workingDirBasename() ? "" : draft;
+    const sid = currentSessionIdForTitle();
+    if (sid) {
+      void sidebar.handleRenameSession(sid, nameToSet);
+      setPendingCustomTitle(null);
+    } else {
+      setPendingCustomTitle(nameToSet || null);
+    }
+    setEditingTitle(false);
+  };
+
+  // Flush any pending custom title once a session ID becomes available.
+  createEffect(() => {
+    const sid = currentSessionIdForTitle();
+    const pending = pendingCustomTitle();
+    if (sid && pending !== null) {
+      void sidebar.handleRenameSession(sid, pending);
+      setPendingCustomTitle(null);
+    }
+  });
+
   // Window-level drag state for drop zone overlay (Tauri native)
   const [windowDragOver, setWindowDragOver] = createSignal(false);
 
@@ -228,6 +292,9 @@ function App() {
       } else {
         permissions.stopPolling();
       }
+      // Load custom session names eagerly so the header title bar can display
+      // a previously-set title without requiring the sidebar to be opened first.
+      void sidebar.loadSessionNames();
     } catch (e) {
       store.dispatch(actions.setSessionError(`Failed to start session: ${e}`));
     }
@@ -1004,6 +1071,10 @@ function App() {
     if (target.closest('.session-rename-btn') || target.closest('.session-item.editing')) {
       return;
     }
+    // Don't steal focus from the editable conversation title in the top bar
+    if (target.closest('.dir-indicator')) {
+      return;
+    }
     // Don't steal focus from project picker modal interactions
     if (target.closest('.project-picker-overlay')) {
       return;
@@ -1396,26 +1467,62 @@ function App() {
             Condition is inverse of warning: !(threshold !== "ok" && !dismissed) = (threshold === "ok" || dismissed) */}
         <Show when={session.workingDir() && (contextThreshold() === "ok" || store.warningDismissed())}>
           <div class="dir-indicator">
-            <Show when={__CT_WORKTREE__}>
-              <span class="worktree-indicator">{__CT_WORKTREE__}</span>
-              <span class="worktree-separator">:</span>
-            </Show>
-            <Show when={session.sandboxEnabled()}>
-              <span class="sandbox-indicator">
-                🔒
-                <span class="sandbox-tooltip">
-                  Sandboxed — writes restricted to:{"\n"}{(() => { const parts = (session.workingDir() || "").split("/"); return parts.length > 3 ? ".../" + parts.slice(-3).join("/") : session.workingDir(); })()}{"\n\n"}Commands and file writes are limited to this directory and below. Reads are unrestricted.
+            <div class="dir-indicator-title-row">
+              <Show when={__CT_WORKTREE__}>
+                <span class="worktree-indicator">{__CT_WORKTREE__}</span>
+                <span class="worktree-separator">:</span>
+              </Show>
+              <Show when={session.sandboxEnabled()}>
+                <span class="sandbox-indicator">
+                  🔒
+                  <span class="sandbox-tooltip">
+                    Sandboxed — writes restricted to:{"\n"}{(() => { const parts = (session.workingDir() || "").split("/"); return parts.length > 3 ? ".../" + parts.slice(-3).join("/") : session.workingDir(); })()}{"\n\n"}Commands and file writes are limited to this directory and below. Reads are unrestricted.
+                  </span>
                 </span>
+              </Show>
+              <Show
+                when={editingTitle()}
+                fallback={
+                  <span
+                    class="dir-indicator-title"
+                    onClick={beginEditTitle}
+                    title="Click to rename this conversation"
+                  >
+                    {effectiveTitle()}
+                  </span>
+                }
+              >
+                <input
+                  ref={titleInputRef}
+                  class="dir-indicator-title-input"
+                  type="text"
+                  value={titleDraft()}
+                  onInput={(e) => setTitleDraft(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitTitleEdit();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      cancelTitleEdit();
+                    }
+                  }}
+                  onBlur={commitTitleEdit}
+                />
+              </Show>
+            </div>
+            <div class="dir-indicator-subtitle">
+              <span class="dir-indicator-subtitle-path" title={session.workingDir() ?? ""}>
+                {session.workingDir()}
               </span>
-            </Show>
-            {session.workingDir()!.split("/").pop() || session.workingDir()}
-            <Show when={settings.claudeModel()}>
-              <span class="worktree-separator">:</span>
-              <span class="model-indicator">
-                {settings.availableModels.find((m) => m.value === settings.claudeModel())?.label
-                  ?? settings.claudeModel()}
-              </span>
-            </Show>
+              <Show when={settings.claudeModel()}>
+                <span class="worktree-separator">·</span>
+                <span class="model-indicator">
+                  {settings.availableModels.find((m) => m.value === settings.claudeModel())?.label
+                    ?? settings.claudeModel()}
+                </span>
+              </Show>
+            </div>
           </div>
         </Show>
 
