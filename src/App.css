@@ -523,7 +523,7 @@ body {
   border: none;
   z-index: 1000;
   color: var(--fg-muted);
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
   gap: 1px;
 }
 
