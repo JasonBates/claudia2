@@ -2,7 +2,7 @@
 
 .update-banner {
   position: fixed;
-  top: 32px; /* Below the title bar */
+  top: 56px; /* Below the title bar */
   left: 0;
   right: 0;
   display: flex;
