@@ -31,12 +31,8 @@ describe("highlight", () => {
       // Check that createHighlighter was called with expected themes and languages
       const { createHighlighter: mockCreate } = await import("shiki");
       expect(mockCreate).toHaveBeenCalledWith({
-        themes: expect.arrayContaining([
-          "solarized-dark",
-          "solarized-light",
-          "github-dark",
-          "github-light",
-        ]),
+        // Only the two reachable themes are loaded eagerly
+        themes: ["github-dark", "github-light"],
         langs: expect.arrayContaining([
           "typescript",
           "javascript",
@@ -98,7 +94,7 @@ describe("highlight", () => {
       expect(result).toContain("<pre");
       expect(freshMockHighlighter.codeToHtml).toHaveBeenCalledWith("const x = 1;", {
         lang: "typescript",
-        theme: "solarized-dark",
+        theme: "github-dark",
       });
     });
 
@@ -117,7 +113,7 @@ describe("highlight", () => {
 
       expect(freshMockHighlighter.codeToHtml).toHaveBeenCalledWith("plain text", {
         lang: "text",
-        theme: "solarized-dark",
+        theme: "github-dark",
       });
     });
 
@@ -162,6 +158,28 @@ describe("highlight", () => {
       const result = await freshHighlightCode("some code", "text");
 
       expect(result).toMatch(/^<pre><code>.*<\/code><\/pre>$/);
+    });
+
+    it("should cache results and not re-tokenize identical code", async () => {
+      const freshMockHighlighter = {
+        getLoadedLanguages: vi.fn().mockReturnValue(["typescript"]),
+        codeToHtml: vi.fn().mockReturnValue('<pre class="shiki"><code>cached</code></pre>'),
+      };
+      vi.doMock("shiki", () => ({
+        createHighlighter: vi.fn().mockResolvedValue(freshMockHighlighter),
+      }));
+
+      const { highlightCode: freshHighlightCode } = await import("../lib/highlight");
+
+      const first = await freshHighlightCode("const x = 1;", "typescript");
+      const second = await freshHighlightCode("const x = 1;", "typescript");
+
+      expect(first).toBe(second);
+      expect(freshMockHighlighter.codeToHtml).toHaveBeenCalledTimes(1);
+
+      // Different code is a cache miss
+      await freshHighlightCode("const y = 2;", "typescript");
+      expect(freshMockHighlighter.codeToHtml).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -1,4 +1,13 @@
-import { Component, createMemo, createResource, For, Show } from "solid-js";
+import {
+  Component,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  Index,
+  onCleanup,
+  Show,
+} from "solid-js";
 import { highlightCode } from "../lib/highlight";
 
 interface MessageContentProps {
@@ -135,19 +144,42 @@ function parseMarkdown(content: string): ParsedBlock[] {
   return blocks.length > 0 ? blocks : [{ type: "text", content }];
 }
 
+// While a code block streams, its content changes every few milliseconds and
+// re-tokenizing the whole block per chunk is the dominant render cost. Debounce
+// the highlight source: the plain <pre> fallback always shows the *live* code,
+// so the debounce only delays styling, never content.
+const HIGHLIGHT_DEBOUNCE_MS = 100;
+
 const CodeBlock: Component<{ code: string; lang: string }> = (props) => {
-  const [highlighted] = createResource(
-    () => ({ code: props.code, lang: props.lang }),
-    async ({ code, lang }) => highlightCode(code, lang)
+  const [stable, setStable] = createSignal({ code: props.code, lang: props.lang });
+
+  createEffect(() => {
+    const code = props.code;
+    const lang = props.lang;
+    if (stable().code === code && stable().lang === lang) return;
+    const timer = setTimeout(() => setStable({ code, lang }), HIGHLIGHT_DEBOUNCE_MS);
+    onCleanup(() => clearTimeout(timer));
+  });
+
+  const [highlighted] = createResource(stable, ({ code, lang }) =>
+    highlightCode(code, lang)
   );
+
+  // Only show highlighted HTML when it matches the code currently displayed.
+  // Otherwise fall back to plain <pre> with the live code rather than showing
+  // stale highlighted content that lags the stream.
+  const current = () =>
+    !highlighted.loading && stable().code === props.code
+      ? highlighted()
+      : undefined;
 
   return (
     <div class="code-block">
       <div class="code-header">
         <span class="code-lang">{props.lang}</span>
       </div>
-      <Show when={highlighted()} fallback={<pre><code>{props.code}</code></pre>}>
-        <div innerHTML={highlighted()} />
+      <Show when={current()} fallback={<pre><code>{props.code}</code></pre>}>
+        <div innerHTML={current()} />
       </Show>
     </div>
   );
@@ -350,18 +382,29 @@ const TextBlock: Component<{ content: string }> = (props) => {
 const MessageContent: Component<MessageContentProps> = (props) => {
   const blocks = createMemo(() => parseMarkdown(props.content));
 
+  // <Index>, not <For>: parseMarkdown returns fresh block objects on every
+  // run, so reference-keyed <For> would destroy and recreate the DOM for
+  // EVERY block in the message on every streamed token (O(n²) per response).
+  // <Index> keys by position; the per-index memos below use ===-equality so
+  // blocks whose content hasn't changed don't re-render at all - during
+  // streaming only the trailing block updates.
   return (
     <div class="message-content">
-      <For each={blocks()}>
-        {(block) => (
-          <Show
-            when={block.type === "code"}
-            fallback={<TextBlock content={block.content} />}
-          >
-            <CodeBlock code={block.content} lang={block.lang || "text"} />
-          </Show>
-        )}
-      </For>
+      <Index each={blocks()}>
+        {(block) => {
+          const type = createMemo(() => block().type);
+          const content = createMemo(() => block().content);
+          const lang = createMemo(() => block().lang || "text");
+          return (
+            <Show
+              when={type() === "code"}
+              fallback={<TextBlock content={content()} />}
+            >
+              <CodeBlock code={content()} lang={lang()} />
+            </Show>
+          );
+        }}
+      </Index>
     </div>
   );
 };
