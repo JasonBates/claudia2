@@ -158,6 +158,14 @@ pub enum ClaudeEvent {
     /// Response was interrupted by user
     Interrupted,
 
+    /// An autonomous CLI turn (background task notification follow-up) is
+    /// starting - events until AutoTurnEnd belong to it, not to any pending
+    /// user prompt. Consumed by the Rust routing layer, not the frontend.
+    AutoTurnStart,
+
+    /// The autonomous CLI turn finished
+    AutoTurnEnd,
+
     /// Process closed
     Closed { code: i32 },
 

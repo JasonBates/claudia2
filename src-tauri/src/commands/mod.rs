@@ -60,6 +60,12 @@ pub struct AppState {
     pub session_id: String,
     /// Monotonic counter to detect superseded requests (prevents concurrent event loop hangs)
     pub request_generation: AtomicU64,
+    /// True while an autonomous CLI turn (bg task notification follow-up) is
+    /// streaming. Set/cleared by whichever consumer sees the AutoTurnStart/
+    /// AutoTurnEnd markers (drain, send_message loop, or bg pump) so the flag
+    /// survives handoffs between them. While set, streaming events route to
+    /// claude-bg-event instead of being attributed to the active user prompt.
+    pub auto_turn_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Handle to background event pump task
     /// Reads late-arriving events (e.g., background task completions) between send_message calls
     /// and forwards them to the frontend via Tauri's global event system
@@ -121,6 +127,7 @@ impl AppState {
             resume_session_id,
             session_id,
             request_generation: AtomicU64::new(0),
+            auto_turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bg_pump_handle: Arc::new(Mutex::new(None)),
             pending_prompt: Arc::new(Mutex::new(pending_prompt)),
             result_socket_path: Arc::new(Mutex::new(result_socket_path)),

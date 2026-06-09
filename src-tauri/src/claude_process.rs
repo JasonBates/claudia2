@@ -792,6 +792,9 @@ fn parse_bridge_message(json: &serde_json::Value) -> Option<ClaudeEvent> {
 
         "interrupted" => Some(ClaudeEvent::Interrupted),
 
+        "auto_turn_start" => Some(ClaudeEvent::AutoTurnStart),
+        "auto_turn_end" => Some(ClaudeEvent::AutoTurnEnd),
+
         "closed" => {
             let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             Some(ClaudeEvent::Closed { code })

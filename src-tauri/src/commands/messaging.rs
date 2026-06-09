@@ -216,6 +216,16 @@ pub async fn send_message(
             while let Ok(Some(event)) =
                 timeout(Duration::from_millis(10), receiver.recv_event()).await
             {
+                // Keep the autonomous-turn flag in sync even when markers land
+                // in the drain (e.g. an auto turn started while idle)
+                if matches!(&event, ClaudeEvent::AutoTurnStart) {
+                    state.auto_turn_active.store(true, Ordering::SeqCst);
+                    continue;
+                }
+                if matches!(&event, ClaudeEvent::AutoTurnEnd) {
+                    state.auto_turn_active.store(false, Ordering::SeqCst);
+                    continue;
+                }
                 // Forward Status and Ready events to frontend instead of draining
                 // Ready contains session metadata (sessionId, model) needed for resume
                 if matches!(
@@ -415,6 +425,39 @@ pub async fn send_message(
             Ok(Some(event)) => {
                 event_count += 1;
                 idle_count = 0;
+
+                // Autonomous-turn routing: events bracketed by AutoTurnStart/
+                // AutoTurnEnd belong to a CLI-initiated turn (background task
+                // notification follow-up), not to this prompt. Route them to
+                // the background path so they can't be consumed as the answer
+                // to the active user message (the off-by-one attribution bug
+                // where every response lags one prompt behind).
+                if matches!(event, ClaudeEvent::AutoTurnStart) {
+                    state.auto_turn_active.store(true, Ordering::SeqCst);
+                    cmd_debug_log("AUTO_TURN", "start - routing events to background");
+                    continue;
+                }
+                if matches!(event, ClaudeEvent::AutoTurnEnd) {
+                    state.auto_turn_active.store(false, Ordering::SeqCst);
+                    cmd_debug_log("AUTO_TURN", "end - foreground attribution resumed");
+                    continue;
+                }
+                if matches!(
+                    event,
+                    ClaudeEvent::Ready { .. } | ClaudeEvent::Closed { .. } | ClaudeEvent::Interrupted
+                ) {
+                    // Bridge restart/interrupt kills any in-flight autonomous
+                    // turn - its AutoTurnEnd will never arrive, so clear the
+                    // flag here to avoid routing real responses to background
+                    state.auto_turn_active.store(false, Ordering::SeqCst);
+                }
+                if state.auto_turn_active.load(Ordering::SeqCst)
+                    && (is_background_drain_forward_event(&event)
+                        || matches!(event, ClaudeEvent::Result { .. }))
+                {
+                    let _ = app.emit("claude-bg-event", &event);
+                    continue;
+                }
 
                 // Track if we've received actual content (text or tool use)
                 if matches!(
@@ -766,6 +809,7 @@ pub async fn send_message(
     {
         let pump_receiver = state.receiver.clone();
         let pump_app = app.clone();
+        let pump_auto_turn = state.auto_turn_active.clone();
         let handle = tokio::spawn(async move {
             cmd_debug_log("PUMP", "Background event pump started");
             loop {
@@ -790,6 +834,16 @@ pub async fn send_message(
                 }; // Lock released here (RAII)
 
                 if let Some(event) = event {
+                    // Track autonomous-turn markers (toggle the shared flag,
+                    // never forward them - the frontend doesn't know them)
+                    if matches!(&event, ClaudeEvent::AutoTurnStart) {
+                        pump_auto_turn.store(true, Ordering::SeqCst);
+                        continue;
+                    }
+                    if matches!(&event, ClaudeEvent::AutoTurnEnd) {
+                        pump_auto_turn.store(false, Ordering::SeqCst);
+                        continue;
+                    }
                     // Forward every pump event EXCEPT Result. The bridge emits
                     // both an early `done` (on message_stop) and a late CLI
                     // `result` for the same turn — the main loop breaks on
