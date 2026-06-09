@@ -212,6 +212,32 @@ export const StoreProvider: ParentComponent = (props) => {
 
         const { id } = action.payload as { id: string };
 
+        // Locate a tool in finalized messages (most recent first). Used as a
+        // fallback when the tool is no longer in tools.current/streaming.blocks
+        // because the turn already finalized before its update arrived.
+        const findInFinalizedMessages = (toolId: string) => {
+          for (let m = state.messages.length - 1; m >= 0; m--) {
+            const msg = state.messages[m];
+            if (msg.contentBlocks) {
+              for (let b = 0; b < msg.contentBlocks.length; b++) {
+                const block = msg.contentBlocks[b];
+                if (block.type === "tool_use" && (block as { type: "tool_use"; tool: ToolUse }).tool.id === toolId) {
+                  return { msgIdx: m, msgBlockIdx: b, msgToolIdx: -1 };
+                }
+              }
+            }
+            // Fallback for legacy finalized messages that only carry toolUses
+            if (msg.toolUses) {
+              for (let t = 0; t < msg.toolUses.length; t++) {
+                if (msg.toolUses[t].id === toolId) {
+                  return { msgIdx: m, msgBlockIdx: -1, msgToolIdx: t };
+                }
+              }
+            }
+          }
+          return { msgIdx: -1, msgBlockIdx: -1, msgToolIdx: -1 };
+        };
+
         if (action.type === "UPDATE_TOOL") {
           const { updates } = action.payload as { id: string; updates: Partial<ToolUse> };
 
@@ -246,8 +272,16 @@ export const StoreProvider: ParentComponent = (props) => {
             }
           }
 
-          // Early return if tool not found in either location
-          if (toolIdx === -1 && blockIdx === -1) return;
+          // Fall back to finalized messages: a slow tool's result can race
+          // FINISH_STREAMING (tools.current is cleared on turn end), and
+          // without this the finalized tool card spins forever.
+          const { msgIdx, msgBlockIdx, msgToolIdx } =
+            toolIdx === -1 && blockIdx === -1
+              ? findInFinalizedMessages(id)
+              : { msgIdx: -1, msgBlockIdx: -1, msgToolIdx: -1 };
+
+          // Early return if tool not found anywhere
+          if (toolIdx === -1 && blockIdx === -1 && msgIdx === -1) return;
 
           // Update tools.current if found
           if (toolIdx !== -1) {
@@ -262,6 +296,24 @@ export const StoreProvider: ParentComponent = (props) => {
               type: "tool_use" as const,
               tool: { ...toolBlock.tool, ...finalUpdates }
             });
+          }
+
+          // Update finalized message if found (late-arriving tool_result)
+          if (msgIdx !== -1 && msgBlockIdx !== -1) {
+            const msgBlocks = state.messages[msgIdx].contentBlocks!;
+            const toolBlock = msgBlocks[msgBlockIdx] as { type: "tool_use"; tool: ToolUse };
+            const newBlocks = [...msgBlocks];
+            newBlocks[msgBlockIdx] = {
+              type: "tool_use" as const,
+              tool: { ...toolBlock.tool, ...finalUpdates }
+            };
+            setState("messages", msgIdx, "contentBlocks", newBlocks);
+          }
+
+          // Update legacy message.toolUses if finalized without contentBlocks
+          if (msgIdx !== -1 && msgToolIdx !== -1) {
+            const msgTool = state.messages[msgIdx].toolUses![msgToolIdx];
+            setState("messages", msgIdx, "toolUses", msgToolIdx, { ...msgTool, ...finalUpdates } as ToolUse);
           }
         } else if (action.type === "UPDATE_TOOL_SUBAGENT") {
           const { subagent } = action.payload;
@@ -294,35 +346,10 @@ export const StoreProvider: ParentComponent = (props) => {
           }
 
           // Find in finalized messages (for late-arriving subagent_end events)
-          let msgIdx = -1;
-          let msgBlockIdx = -1;
-          let msgToolIdx = -1;
-          if (toolIdx === -1 && blockIdx === -1) {
-            // Search in finalized messages (reverse order - most recent first)
-            for (let m = state.messages.length - 1; m >= 0 && msgIdx === -1; m--) {
-              const msg = state.messages[m];
-              if (msg.contentBlocks) {
-                for (let b = 0; b < msg.contentBlocks.length; b++) {
-                  const block = msg.contentBlocks[b];
-                  if (block.type === "tool_use" && (block as { type: "tool_use"; tool: ToolUse }).tool.id === id) {
-                    msgIdx = m;
-                    msgBlockIdx = b;
-                    break;
-                  }
-                }
-              }
-              // Fallback for legacy finalized messages that only carry toolUses
-              if (msgIdx === -1 && msg.toolUses) {
-                for (let t = 0; t < msg.toolUses.length; t++) {
-                  if (msg.toolUses[t].id === id) {
-                    msgIdx = m;
-                    msgToolIdx = t;
-                    break;
-                  }
-                }
-              }
-            }
-          }
+          const { msgIdx, msgBlockIdx, msgToolIdx } =
+            toolIdx === -1 && blockIdx === -1
+              ? findInFinalizedMessages(id)
+              : { msgIdx: -1, msgBlockIdx: -1, msgToolIdx: -1 };
 
           // Early return if tool not found anywhere
           if (toolIdx === -1 && blockIdx === -1 && msgIdx === -1) return;

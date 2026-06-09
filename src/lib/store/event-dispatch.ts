@@ -406,10 +406,23 @@ export function handleToolInput(event: NormalizedToolInputEvent, ctx: EventConte
 
   // Regular tool input
   ctx.refs.toolInputRef.current += json;
+  const buffer = ctx.refs.toolInputRef.current;
 
-  // Incrementally update tool input so UI shows command/description while streaming
-  const parsedInput = parseToolInput(ctx.refs.toolInputRef.current);
-  ctx.dispatch({ type: "UPDATE_LAST_TOOL_INPUT", payload: parsedInput });
+  // Incrementally update tool input so UI shows command/description while
+  // streaming - but avoid the O(n²) trap of fully re-parsing and re-rendering
+  // the growing buffer on every chunk (a Write tool streaming a 100KB file
+  // sends hundreds of chunks):
+  // - A full JSON.parse can only succeed when the input is complete, so only
+  //   attempt it when this chunk can actually close the JSON.
+  // - Partial {raw} updates only affect the first ~60 chars of the tool
+  //   card's preview, so once the buffer is past that point further partial
+  //   dispatches can't change anything visible - skip them. The complete
+  //   input is always dispatched here on the closing chunk or by
+  //   handleToolPending's finalize.
+  if (json.endsWith("}") || buffer.length <= 256) {
+    const parsedInput = parseToolInput(buffer);
+    ctx.dispatch({ type: "UPDATE_LAST_TOOL_INPUT", payload: parsedInput });
+  }
 }
 
 /**
@@ -467,9 +480,23 @@ export function handleToolResult(event: NormalizedToolResultEvent, ctx: EventCon
   const toolExists = currentTools.some((t) => t.id === targetToolId);
 
   if (!toolExists) {
+    // Two distinct races land here:
+    // 1. Result arrived before its tool_use registered (mid-turn) - the
+    //    pending entry is applied when the tool registers.
+    // 2. Result arrived after the turn finalized (tools.current was cleared
+    //    on FINISH_STREAMING) - the tool never re-registers, so also dispatch
+    //    UPDATE_TOOL, whose finalized-message fallback clears the spinner.
+    //    If neither location has the tool, the dispatch is a no-op.
     ctx.refs.pendingResultsRef.current.set(targetToolId, {
       result,
       isError,
+    });
+    ctx.dispatch({
+      type: "UPDATE_TOOL",
+      payload: {
+        id: targetToolId,
+        updates: { result, isLoading: false },
+      },
     });
     return;
   }

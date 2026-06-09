@@ -360,7 +360,15 @@ const ToolResult: Component<ToolResultProps> = (props) => {
       }
     }
 
-    // Fallback: show truncated JSON
+    // Fallback: show truncated JSON. Only ~60 chars display, so never
+    // stringify a huge input wholesale - the streaming {raw} accumulation
+    // can be 100KB+ and this runs on every streamed update.
+    const rawOnly = input.raw;
+    if (typeof rawOnly === "string" && Object.keys(input).length === 1) {
+      if (!rawOnly) return "";
+      const str = JSON.stringify({ raw: rawOnly.slice(0, 70) });
+      return str.length > 60 ? str.slice(0, 60) + "..." : str;
+    }
     const str = JSON.stringify(props.input);
     if (str === "{}" || str === '{"raw":""}') return "";
     return str.length > 60 ? str.slice(0, 60) + "..." : str;
@@ -387,9 +395,14 @@ const ToolResult: Component<ToolResultProps> = (props) => {
   };
 
   const hasInput = () => {
-    if (!props.input) return false;
-    const str = JSON.stringify(props.input);
-    return str !== "{}" && str !== '{"raw":""}';
+    // Key checks instead of JSON.stringify - the input can be a 100KB+
+    // streaming {raw} buffer and this runs on every streamed update
+    const input = props.input as Record<string, unknown> | undefined;
+    if (!input) return false;
+    const keys = Object.keys(input);
+    if (keys.length === 0) return false;
+    if (keys.length === 1 && keys[0] === "raw" && !input.raw) return false;
+    return true;
   };
 
   // Check if this is TodoWrite with todos

@@ -188,6 +188,20 @@ async function main() {
   let pendingCliResultAcks = [];    // {turnId, createdAt} entries for late CLI result suppression
   let currentTurnId = 0;            // Incremented on each new user message to scope ack matching
 
+  // Turn attribution — the CLI starts turns autonomously (background task
+  // notifications), not just in response to user input. Without classifying
+  // turns, an autonomous turn streaming when the user submits gets consumed
+  // by the frontend as the answer to their prompt, shifting every subsequent
+  // response one turn behind. A turn runs from the first system/status
+  // "requesting" after idle until its result event; it is a user turn iff at
+  // least one user input had been written (and not yet consumed) when it
+  // started. Autonomous turns are bracketed with auto_turn_start/auto_turn_end
+  // markers so the Rust side routes their events to the background path.
+  let pendingUserTurns = 0;         // user inputs written, not yet consumed by a turn
+  let inTurn = false;               // between turn start and its end (message_stop end_turn or result)
+  let autoTurn = false;             // current turn is autonomous
+  let expectedAutoResults = 0;      // auto-turn results to swallow (their done already went out)
+
   // Buffer limits to prevent unbounded memory growth
   const MAX_TASK_INPUT_SIZE = 1024 * 1024;  // 1MB limit for task input buffer
   const MAX_PENDING_MESSAGES = 100;          // Max queued messages during respawn
@@ -1718,8 +1732,13 @@ async function main() {
                 });
                 taskInputBuffer = "";
               }
-              // Try to parse accumulated JSON to extract subagent details
-              if (subagent.status === "starting") {
+              // Try to parse accumulated JSON to extract subagent details.
+              // The parse can only succeed once the full input is buffered, so
+              // skip chunks that can't close the JSON - re-parsing the whole
+              // growing buffer on every delta is O(n²) and stalls the bridge
+              // for large subagent prompts. ("}" inside a prompt string can
+              // still trigger an attempt; it just fails and we keep going.)
+              if (subagent.status === "starting" && event.delta.partial_json.endsWith("}")) {
                 try {
                   const parsed = JSON.parse(taskInputBuffer);
                   if (parsed.subagent_type) {
@@ -1777,14 +1796,31 @@ async function main() {
         // message while background agents are running, causing the Rust main
         // loop to hit its streaming timeout (6 seconds). By sending done here,
         // the main loop breaks instantly.
-        if (lastStopReason === "end_turn" && !suppressUiStream) {
-          sendEvent("done", {});
-          const pendingCliResults = enqueuePendingCliResultAck();
-          debugLog("EARLY_DONE", {
-            pendingCliResults,
-            activeSubagents: activeSubagents.size,
-            reason: "message_stop with end_turn"
-          });
+        //
+        // This is also the reliable turn boundary for attribution: the CLI
+        // can hold `result` events while bg agents run, so a turn must be
+        // considered ended here or the next turn start is never classified.
+        if (lastStopReason === "end_turn") {
+          inTurn = false;
+          if (autoTurn) {
+            autoTurn = false;
+            if (!suppressUiStream) {
+              sendEvent("done", {});
+              // This turn's late CLI result must be swallowed - its done
+              // already went out and a pending user prompt must not consume it
+              expectedAutoResults++;
+              sendEvent("auto_turn_end", {});
+              debugLog("EARLY_DONE", { reason: "auto turn message_stop", expectedAutoResults });
+            }
+          } else if (!suppressUiStream) {
+            sendEvent("done", {});
+            const pendingCliResults = enqueuePendingCliResultAck();
+            debugLog("EARLY_DONE", {
+              pendingCliResults,
+              activeSubagents: activeSubagents.size,
+              reason: "message_stop with end_turn"
+            });
+          }
         }
         lastStopReason = null;
         break;
@@ -1843,6 +1879,12 @@ async function main() {
     taskInputBuffer = "";
     currentToolId = null;
     currentToolName = null;
+    // Turn attribution state - the new process starts idle; pending
+    // messages re-increment pendingUserTurns when actually written
+    pendingUserTurns = 0;
+    inTurn = false;
+    autoTurn = false;
+    expectedAutoResults = 0;
 
     claude = spawn(claudePath, buildClaudeArgs(resumeSessionId), {
       stdio: ["pipe", "pipe", "pipe"],
@@ -1876,6 +1918,21 @@ async function main() {
 
         switch (msg.type) {
           case "system":
+            // Turn start: the first "requesting" status after idle opens a
+            // turn. Classify it now - if no user input is pending, the CLI
+            // started this turn on its own (bg task notification follow-up).
+            if (msg.subtype === "status" && msg.status === "requesting" && !inTurn) {
+              inTurn = true;
+              autoTurn = pendingUserTurns === 0 && !isWarmingUp;
+              if (!autoTurn) {
+                // The CLI batches all queued inputs into this turn
+                pendingUserTurns = 0;
+              }
+              debugLog("TURN_START", { autoTurn, isWarmingUp });
+              if (autoTurn) {
+                sendEvent("auto_turn_start", {});
+              }
+            }
             if (msg.subtype === "init" && !readySent) {
               // Store session ID for subsequent messages
               currentSessionId = msg.session_id;
@@ -2302,6 +2359,24 @@ async function main() {
             break;
 
           case "result":
+            // Turn boundary: a logical turn also ends with a result event
+            // (the message_stop path above handles the common case; this
+            // covers turns that end without an end_turn message_stop).
+            inTurn = false;
+            if (autoTurn) {
+              autoTurn = false;
+              queueMicrotask(() => sendEvent("auto_turn_end", {}));
+            }
+
+            // Swallow results for autonomous turns whose bracket already
+            // closed at message_stop - forwarding one would let a pending
+            // user prompt consume it as its own completion.
+            if (expectedAutoResults > 0) {
+              expectedAutoResults--;
+              debugLog("AUTO_TURN_RESULT_SUPPRESSED", { remaining: expectedAutoResults });
+              break;
+            }
+
             // Skip result/done during warmup (but end warmup)
             if (isWarmingUp) {
               debugLog("WARMUP", "Warmup complete, suppressing result event");
@@ -2483,6 +2558,7 @@ async function main() {
       for (const msg of pendingMessages) {
         debugLog("PENDING_SEND", msg);
         claude.stdin.write(msg);
+        pendingUserTurns++;  // Turn attribution for requeued inputs
       }
       pendingMessages = [];
     }
@@ -2536,6 +2612,7 @@ async function main() {
     mainResultSent = false;
     lastStopReason = null;
     currentTurnId++;  // Scope acks — stale entries from prior turns can't suppress this turn's result
+    pendingUserTurns++;  // Turn attribution — the next turn to start answers this input
 
     const msg = JSON.stringify({
       type: "user",
@@ -2582,6 +2659,18 @@ async function main() {
     // Kill the process - stdin.end() doesn't stop Claude fast enough
     // The close handler will respawn automatically
     claude.kill('SIGTERM');
+
+    // Escalate if SIGTERM is ignored (e.g. stuck child process group).
+    // Without this, close never fires, isInterrupting stays true forever,
+    // and the session is dead - Escape does nothing until app restart.
+    // Pin the target so a respawned process can't be killed by mistake.
+    const target = claude;
+    setTimeout(() => {
+      if (target.exitCode === null && target.signalCode === null) {
+        debugLog("INTERRUPT", "SIGTERM ignored after 3s, escalating to SIGKILL");
+        try { target.kill('SIGKILL'); } catch { /* already gone */ }
+      }
+    }, 3000);
   }
 
   // Initial spawn
@@ -2828,6 +2917,7 @@ async function main() {
           }) + "\n";
           if (claude && claude.stdin.writable) {
             claude.stdin.write(modelMsg);
+            pendingUserTurns++;
           }
           // Emit ready with updated model so frontend updates context limit display
           sendEvent("ready", { sessionId: currentSessionId, model: newModel, tools: 0 });
@@ -2897,6 +2987,7 @@ async function main() {
           }) + "\n";
           if (claude && claude.stdin.writable) {
             claude.stdin.write(modelMsg);
+            pendingUserTurns++;
           }
           sendEvent("ready", { sessionId: currentSessionId, model: newModel, tools: 0 });
           sendEvent("status", { message: `Context window: ${newLimit}` });
@@ -2959,6 +3050,7 @@ async function main() {
       debugLog("CLAUDE_SLASH", slashMsg);
       if (claude && claude.stdin.writable) {
         claude.stdin.write(slashMsg);
+        pendingUserTurns++;
       }
       return;
     }

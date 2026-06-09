@@ -527,21 +527,33 @@ fn read_output_bounded(stdout: ChildStdout, tx: mpsc::Sender<ClaudeEvent>) {
             continue;
         }
 
-        // Truncate safely at char boundary for logging
-        let truncated: String = line.chars().take(200).collect();
-        rust_debug_log("RAW_LINE", &truncated);
+        // Gate per-line allocations: rust_debug_log no-ops internally when
+        // debug is off, but its format!/collect arguments are still evaluated
+        // at the call site - on the per-event hot path that's a String
+        // allocation (and a full event Debug-format below) for every line.
+        let debug = crate::commands::cmd_debug_enabled();
+
+        if debug {
+            // Truncate safely at char boundary for logging
+            let truncated: String = line.chars().take(200).collect();
+            rust_debug_log("RAW_LINE", &truncated);
+        }
 
         // Parse JSON output from the bridge
         match serde_json::from_str::<serde_json::Value>(&line) {
             Ok(json) => {
-                let msg_type = json
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                rust_debug_log("JSON_PARSED", &format!("type={}", msg_type));
+                if debug {
+                    let msg_type = json
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    rust_debug_log("JSON_PARSED", &format!("type={}", msg_type));
+                }
 
                 if let Some(event) = parse_bridge_message(&json) {
-                    rust_debug_log("EVENT_CREATED", &format!("{:?}", event));
+                    if debug {
+                        rust_debug_log("EVENT_CREATED", &format!("{:?}", event));
+                    }
                     // blocking_send blocks if channel is full (back-pressure)
                     if tx.blocking_send(event).is_err() {
                         rust_debug_log("CHANNEL_ERROR", "Receiver dropped");
@@ -779,6 +791,9 @@ fn parse_bridge_message(json: &serde_json::Value) -> Option<ClaudeEvent> {
         "done" => Some(ClaudeEvent::Done),
 
         "interrupted" => Some(ClaudeEvent::Interrupted),
+
+        "auto_turn_start" => Some(ClaudeEvent::AutoTurnStart),
+        "auto_turn_end" => Some(ClaudeEvent::AutoTurnEnd),
 
         "closed" => {
             let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(0) as i32;

@@ -200,14 +200,6 @@ fn parse_session_file(path: &Path, working_dir: &str) -> Result<SessionEntry, St
         .map_err(|e| format!("Failed to get metadata: {}", e))?;
     let reader = BufReader::new(file);
 
-    // Read all lines (we need first, last, and count)
-    // Use map_while to stop on first read error instead of potentially looping forever
-    let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
-
-    if lines.is_empty() {
-        return Err("Empty file".to_string());
-    }
-
     // Extract session ID from filename
     let session_id = path
         .file_stem()
@@ -215,14 +207,19 @@ fn parse_session_file(path: &Path, working_dir: &str) -> Result<SessionEntry, St
         .to_string_lossy()
         .to_string();
 
-    // Parse lines to extract metadata
+    // Stream lines instead of collecting the whole file - transcripts can be
+    // tens of MB, and this runs for every listed session on sidebar refresh.
+    // We still scan every line (message_count needs it) but only hold one
+    // line in memory at a time, plus the last line for the modified timestamp.
+    // map_while stops on first read error instead of potentially looping forever.
     let mut first_prompt = String::new();
     let mut created = String::new();
     let mut is_sidechain = false;
     let mut message_count: u32 = 0;
+    let mut last_line: Option<String> = None;
 
-    for line in &lines {
-        if let Ok(entry) = serde_json::from_str::<Value>(line) {
+    for line in reader.lines().map_while(Result::ok) {
+        if let Ok(entry) = serde_json::from_str::<Value>(&line) {
             // Check if sidechain (any line with isSidechain=true means it's a sidechain)
             if entry
                 .get("isSidechain")
@@ -241,11 +238,10 @@ fn parse_session_file(path: &Path, working_dir: &str) -> Result<SessionEntry, St
 
             // Get first user message for firstPrompt and created timestamp
             // Skip warmup messages (isMeta, slash commands, etc.)
-            if entry_type == "user" && first_prompt.is_empty() {
-                if warmup::should_skip_entry(&entry, entry_type) {
-                    continue;
-                }
-
+            if entry_type == "user"
+                && first_prompt.is_empty()
+                && !warmup::should_skip_entry(&entry, entry_type)
+            {
                 // Only use string content for first_prompt (not array content like tool results)
                 if let Some(content) = warmup::get_user_string_content(&entry) {
                     first_prompt = content;
@@ -257,12 +253,16 @@ fn parse_session_file(path: &Path, working_dir: &str) -> Result<SessionEntry, St
                 }
             }
         }
+        last_line = Some(line);
     }
 
+    let Some(last_line) = last_line else {
+        return Err("Empty file".to_string());
+    };
+
     // Get modified timestamp from last line
-    let modified = lines
-        .last()
-        .and_then(|line| serde_json::from_str::<Value>(line).ok())
+    let modified = serde_json::from_str::<Value>(&last_line)
+        .ok()
         .and_then(|entry| {
             entry
                 .get("timestamp")
