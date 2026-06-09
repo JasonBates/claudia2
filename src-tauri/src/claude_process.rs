@@ -551,14 +551,11 @@ fn read_output_bounded(stdout: ChildStdout, tx: mpsc::Sender<ClaudeEvent>) {
                 }
             }
             Err(e) => {
-                rust_debug_log(
-                    "JSON_ERROR",
-                    &format!(
-                        "Parse error: {} - line: {}",
-                        e,
-                        &line[..line.len().min(100)]
-                    ),
-                );
+                // chars().take(), not byte slicing: a multibyte char straddling
+                // the boundary would panic and kill the reader thread (tearing
+                // down the active session)
+                let preview: String = line.chars().take(100).collect();
+                rust_debug_log("JSON_ERROR", &format!("Parse error: {} - line: {}", e, preview));
             }
         }
     }
