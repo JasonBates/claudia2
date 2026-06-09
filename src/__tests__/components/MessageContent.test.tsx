@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import MessageContent from "../../components/MessageContent";
 
@@ -36,5 +37,30 @@ describe("MessageContent", () => {
     expect(link).toHaveAttribute("href", "https://openai.com");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("preserves DOM nodes of earlier blocks while content streams", () => {
+    // Regression: blocks were keyed by object reference, so every streamed
+    // token destroyed and recreated the DOM for ALL blocks in the message.
+    const [content, setContent] = createSignal(
+      "first paragraph\n\n```js\nconst a = 1;\n```\n\nsecond paragraph"
+    );
+    render(() => <MessageContent content={content()} />);
+
+    const firstTextBlock = document.querySelector(".text-block");
+    const codeBlock = document.querySelector(".code-block");
+    expect(firstTextBlock).not.toBeNull();
+    expect(codeBlock).not.toBeNull();
+
+    // Simulate streaming: append to the trailing text block
+    setContent(content() + " with more streamed text");
+
+    // Earlier blocks must be the exact same DOM nodes
+    expect(document.querySelector(".text-block")).toBe(firstTextBlock);
+    expect(document.querySelector(".code-block")).toBe(codeBlock);
+    // Trailing block received the new content
+    expect(
+      screen.getByText("second paragraph with more streamed text")
+    ).toBeInTheDocument();
   });
 });
