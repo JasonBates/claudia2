@@ -159,8 +159,13 @@ impl Config {
         self.default_working_dir
             .as_ref()
             .map(|s| {
-                if s.starts_with("~") {
-                    dirs::home_dir().unwrap_or_default().join(&s[2..])
+                // Expand "~" and "~/..." (a bare "~" previously panicked on
+                // the out-of-bounds &s[2..]). Other forms (e.g. "~user") pass
+                // through as literal paths.
+                if s == "~" {
+                    dirs::home_dir().unwrap_or_default()
+                } else if let Some(rest) = s.strip_prefix("~/") {
+                    dirs::home_dir().unwrap_or_default().join(rest)
                 } else {
                     PathBuf::from(s)
                 }
@@ -195,6 +200,31 @@ mod tests {
         assert!(!dir.to_string_lossy().starts_with("~"));
         // Should contain the rest of the path
         assert!(dir.to_string_lossy().contains("Code/repos"));
+    }
+
+    #[test]
+    fn working_dir_expands_bare_tilde_without_panicking() {
+        // Regression: "~" (len 1) previously panicked on &s[2..]
+        let config = Config {
+            default_working_dir: Some("~".to_string()),
+            ..Default::default()
+        };
+
+        let dir = config.working_dir();
+
+        assert_eq!(dir, dirs::home_dir().unwrap_or_default());
+    }
+
+    #[test]
+    fn working_dir_passes_tilde_user_through_as_literal() {
+        let config = Config {
+            default_working_dir: Some("~someuser/code".to_string()),
+            ..Default::default()
+        };
+
+        let dir = config.working_dir();
+
+        assert_eq!(dir, PathBuf::from("~someuser/code"));
     }
 
     #[test]
