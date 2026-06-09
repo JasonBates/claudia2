@@ -4,6 +4,7 @@ import {
   formatTokenCount,
   getContextPercentage,
   getContextLimit,
+  estimateCost,
   DEFAULT_CONTEXT_LIMIT,
   CONTEXT_LIMIT_1M,
   CONTEXT_LIMIT_DEFAULT,
@@ -114,6 +115,77 @@ describe('context-utils', () => {
 
     it('allows values over 100%', () => {
       expect(getContextPercentage(375_000)).toBe(150);
+    });
+  });
+
+  describe('estimateCost', () => {
+    // 1M input + 1M output tokens → cost equals per-MTok pricing directly
+    const MTOK = 1_000_000;
+
+    it('prices Fable 5 at $10/$50 per MTok', () => {
+      for (const model of ['fable', 'claude-fable-5', 'claude-fable-5[1m]']) {
+        const cost = estimateCost(MTOK, MTOK, model);
+        expect(cost.inputCost).toBe(10);
+        expect(cost.outputCost).toBe(50);
+        expect(cost.totalCost).toBe(60);
+      }
+    });
+
+    it('prices modern Opus (4.5+ and bare alias) at $5/$25 per MTok', () => {
+      for (const model of [
+        'opus',
+        'claude-opus-4-8',
+        'claude-opus-4-7',
+        'claude-opus-4-6[1m]',
+        'claude-opus-4-5-20251101',
+      ]) {
+        const cost = estimateCost(MTOK, MTOK, model);
+        expect(cost.inputCost).toBe(5);
+        expect(cost.outputCost).toBe(25);
+      }
+    });
+
+    it('prices deprecated Opus (4.1 and earlier) at $15/$75 per MTok', () => {
+      for (const model of [
+        'claude-opus-4-1-20250805',
+        'claude-opus-4-20250514',
+        'claude-3-opus-20240229',
+      ]) {
+        const cost = estimateCost(MTOK, MTOK, model);
+        expect(cost.inputCost).toBe(15);
+        expect(cost.outputCost).toBe(75);
+      }
+    });
+
+    it('prices Sonnet at $3/$15 per MTok', () => {
+      for (const model of ['sonnet', 'claude-sonnet-4-6', 'claude-3-5-sonnet-20241022']) {
+        const cost = estimateCost(MTOK, MTOK, model);
+        expect(cost.inputCost).toBe(3);
+        expect(cost.outputCost).toBe(15);
+      }
+    });
+
+    it('prices Haiku 4.5 at $1/$5 and Haiku 3.5 at $0.80/$4 per MTok', () => {
+      const modern = estimateCost(MTOK, MTOK, 'claude-haiku-4-5-20251001');
+      expect(modern.inputCost).toBe(1);
+      expect(modern.outputCost).toBe(5);
+
+      const legacy = estimateCost(MTOK, MTOK, 'claude-3-5-haiku-20241022');
+      expect(legacy.inputCost).toBe(0.8);
+      expect(legacy.outputCost).toBe(4);
+    });
+
+    it('falls back to Sonnet pricing for unknown models', () => {
+      const cost = estimateCost(MTOK, MTOK, 'unknown-model');
+      expect(cost.inputCost).toBe(3);
+      expect(cost.outputCost).toBe(15);
+    });
+
+    it('scales with token counts', () => {
+      const cost = estimateCost(100_000, 10_000, 'claude-fable-5');
+      expect(cost.inputCost).toBeCloseTo(1.0);
+      expect(cost.outputCost).toBeCloseTo(0.5);
+      expect(cost.totalCost).toBeCloseTo(1.5);
     });
   });
 });

@@ -62,15 +62,21 @@ export function getContextPercentage(
 }
 
 /**
- * Model pricing per million tokens (approximate, as of 2025)
+ * Model pricing per million tokens, matched by family in priority order
+ * (per https://platform.claude.com/docs/en/about-claude/pricing, June 2026).
+ * Patterns match both aliases ("fable", "opus") and full IDs ("claude-fable-5",
+ * "claude-opus-4-8-20260115"), including "[1m]" suffixes.
  */
-const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  "claude-sonnet-4-20250514": { input: 3, output: 15 },
-  "claude-opus-4-5-20251101": { input: 15, output: 75 },
-  "claude-3-5-sonnet-20241022": { input: 3, output: 15 },
-  "claude-3-opus-20240229": { input: 15, output: 75 },
-  "claude-3-5-haiku-20241022": { input: 1, output: 5 },
-};
+const MODEL_PRICING_RULES: Array<{ pattern: RegExp; input: number; output: number }> = [
+  { pattern: /fable|mythos/i, input: 10, output: 50 },
+  // Deprecated Opus 4.1 / Opus 4 / Claude 3 Opus remain $15/$75
+  { pattern: /claude-3-opus|opus-4-1(?![0-9])|opus-4-20/i, input: 15, output: 75 },
+  // Opus 4.5+ (and the bare "opus" alias) are $5/$25
+  { pattern: /opus/i, input: 5, output: 25 },
+  { pattern: /haiku-3|3-5-haiku/i, input: 0.8, output: 4 },
+  { pattern: /haiku/i, input: 1, output: 5 },
+  { pattern: /sonnet/i, input: 3, output: 15 },
+];
 
 // Default pricing if model not found (use sonnet pricing)
 const DEFAULT_PRICING = { input: 3, output: 15 };
@@ -94,7 +100,8 @@ export function estimateCost(
   outputTokens: number,
   model: string
 ): CostEstimate {
-  const pricing = MODEL_PRICING[model] || DEFAULT_PRICING;
+  const pricing =
+    MODEL_PRICING_RULES.find((rule) => rule.pattern.test(model)) || DEFAULT_PRICING;
   const inputCost = (inputTokens / 1_000_000) * pricing.input;
   const outputCost = (outputTokens / 1_000_000) * pricing.output;
   return {
