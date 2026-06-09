@@ -6,7 +6,7 @@ use tauri::{ipc::Channel, AppHandle, Emitter, State};
 use tokio::time::{timeout, Duration};
 
 use super::external_session::{ExternalEvent, ExternalSession};
-use super::{cmd_debug_log, AppState};
+use super::{cmd_debug_enabled, cmd_debug_log, AppState};
 use crate::claude_process::{spawn_claude_process, ClaudeReceiver};
 use crate::events::ClaudeEvent;
 
@@ -225,14 +225,18 @@ pub async fn send_message(
                     if let ClaudeEvent::Ready { session_id, .. } = &event {
                         captured_session_id = Some(session_id.clone());
                     }
-                    cmd_debug_log("DRAIN", &format!("Forwarding event: {:?}", event));
+                    if cmd_debug_enabled() {
+                        cmd_debug_log("DRAIN", &format!("Forwarding event: {:?}", event));
+                    }
                     let _ = channel.send(event);
                     forwarded += 1;
                 } else if is_background_drain_forward_event(&event) {
                     // Forward late background-turn events via global emit instead
                     // of draining them. Otherwise, a user prompt submitted while
                     // a background agent is reporting back can erase that response.
-                    cmd_debug_log("DRAIN", &format!("Forwarding bg event: {:?}", event));
+                    if cmd_debug_enabled() {
+                        cmd_debug_log("DRAIN", &format!("Forwarding bg event: {:?}", event));
+                    }
                     let _ = app.emit("claude-bg-event", &event);
                     forwarded += 1;
                 } else {
@@ -243,7 +247,9 @@ pub async fn send_message(
                         );
                         needs_restart = true;
                     }
-                    cmd_debug_log("DRAIN", &format!("Drained: {:?}", event));
+                    if cmd_debug_enabled() {
+                        cmd_debug_log("DRAIN", &format!("Drained: {:?}", event));
+                    }
                     drained += 1;
                 }
             }
@@ -298,7 +304,9 @@ pub async fn send_message(
             if let Some(receiver) = receiver_guard.as_mut() {
                 match timeout(Duration::from_millis(500), receiver.recv_event()).await {
                     Ok(Some(event)) => {
-                        cmd_debug_log("RESTART", &format!("Event during warmup: {:?}", event));
+                        if cmd_debug_enabled() {
+                            cmd_debug_log("RESTART", &format!("Event during warmup: {:?}", event));
+                        }
                         if let ClaudeEvent::Ready { session_id, .. } = &event {
                             captured_session_id = Some(session_id.clone());
                         }
@@ -580,7 +588,11 @@ pub async fn send_message(
                     }
                 }
 
-                cmd_debug_log("EVENT", &format!("#{} Received: {:?}", event_count, event));
+                // Gate: Debug-formatting the full event (incl. tool stdout / text
+                // deltas) per event is pure hot-path overhead when debug is off
+                if cmd_debug_enabled() {
+                    cmd_debug_log("EVENT", &format!("#{} Received: {:?}", event_count, event));
+                }
 
                 // Check if this is a "done" signal (Done or Interrupted both end the response)
                 let is_done = matches!(event, ClaudeEvent::Done | ClaudeEvent::Interrupted);
@@ -647,10 +659,12 @@ pub async fn send_message(
                         match timeout(Duration::from_millis(20), r.recv_event()).await {
                             Ok(Some(trailing_event)) => {
                                 trailing_count += 1;
-                                cmd_debug_log(
-                                    "TRAILING",
-                                    &format!("#{} {:?}", trailing_count, trailing_event),
-                                );
+                                if cmd_debug_enabled() {
+                                    cmd_debug_log(
+                                        "TRAILING",
+                                        &format!("#{} {:?}", trailing_count, trailing_event),
+                                    );
+                                }
                                 let _ = channel.send(trailing_event);
                             }
                             _ => break,
@@ -791,9 +805,13 @@ pub async fn send_message(
                     // FINISH_STREAMING on empty streaming state creates no
                     // new message.
                     if matches!(&event, ClaudeEvent::Result { .. }) {
-                        cmd_debug_log("PUMP", &format!("Dropping Result (dup guard): {:?}", event));
+                        if cmd_debug_enabled() {
+                            cmd_debug_log("PUMP", &format!("Dropping Result (dup guard): {:?}", event));
+                        }
                     } else {
-                        cmd_debug_log("PUMP", &format!("Forwarding event: {:?}", event));
+                        if cmd_debug_enabled() {
+                            cmd_debug_log("PUMP", &format!("Forwarding event: {:?}", event));
+                        }
                         let _ = pump_app.emit("claude-bg-event", &event);
                     }
                 }

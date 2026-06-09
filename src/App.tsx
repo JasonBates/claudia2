@@ -482,22 +482,30 @@ function App() {
 
 // Wrapper that normalizes events and triggers todo hide timer
   const handleEvent = (event: ClaudeEvent) => {
-    // Normalize the event to canonical camelCase format
-    const normalized = normalizeClaudeEvent(event);
+    // Contain per-event failures: an exception escaping here propagates into
+    // the Tauri channel's drain loop and can stall delivery of the rest of
+    // the turn's buffered events - one malformed event would freeze the
+    // whole stream. Log and move on instead.
+    try {
+      // Normalize the event to canonical camelCase format
+      const normalized = normalizeClaudeEvent(event);
 
-    const wasLoading = store.isLoading();
-    coreEventHandler(normalized);
+      const wasLoading = store.isLoading();
+      coreEventHandler(normalized);
 
-    // Trigger todo panel hide timer when streaming finishes
-    if (wasLoading && !store.isLoading()) {
-      startTodoHideTimer();
+      // Trigger todo panel hide timer when streaming finishes
+      if (wasLoading && !store.isLoading()) {
+        startTodoHideTimer();
+      }
+
+      // Sync session state to useSession hook for session.workingDir() etc.
+      // This keeps the session hook in sync for sidebar functionality
+      session.setSessionActive(store.sessionActive());
+      session.setSessionInfo(store.sessionInfo());
+      session.setLaunchSessionId(store.launchSessionId());
+    } catch (e) {
+      console.error("[handleEvent] Failed to process event:", (event as { type?: string })?.type, e);
     }
-
-    // Sync session state to useSession hook for session.workingDir() etc.
-    // This keeps the session hook in sync for sidebar functionality
-    session.setSessionActive(store.sessionActive());
-    session.setSessionInfo(store.sessionInfo());
-    session.setLaunchSessionId(store.launchSessionId());
   };
 
   // ============================================================================

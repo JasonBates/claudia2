@@ -547,9 +547,16 @@ describe("Event Dispatch Functions", () => {
         result: "early result",
         isError: false,
       });
-      expect(ctx.dispatch).not.toHaveBeenCalledWith(
-        expect.objectContaining({ type: "UPDATE_TOOL" })
-      );
+      // Also dispatches UPDATE_TOOL so a result arriving after the turn
+      // finalized (tools.current cleared) can still clear the spinner via
+      // the finalized-message fallback. No-op if the tool isn't anywhere yet.
+      expect(ctx.dispatch).toHaveBeenCalledWith({
+        type: "UPDATE_TOOL",
+        payload: {
+          id: "tool-123",
+          updates: { result: "early result", isLoading: false },
+        },
+      });
     });
 
     it("should skip duplicate events without tool_use_id", () => {

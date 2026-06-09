@@ -1718,8 +1718,13 @@ async function main() {
                 });
                 taskInputBuffer = "";
               }
-              // Try to parse accumulated JSON to extract subagent details
-              if (subagent.status === "starting") {
+              // Try to parse accumulated JSON to extract subagent details.
+              // The parse can only succeed once the full input is buffered, so
+              // skip chunks that can't close the JSON - re-parsing the whole
+              // growing buffer on every delta is O(n²) and stalls the bridge
+              // for large subagent prompts. ("}" inside a prompt string can
+              // still trigger an attempt; it just fails and we keep going.)
+              if (subagent.status === "starting" && event.delta.partial_json.endsWith("}")) {
                 try {
                   const parsed = JSON.parse(taskInputBuffer);
                   if (parsed.subagent_type) {
@@ -2582,6 +2587,18 @@ async function main() {
     // Kill the process - stdin.end() doesn't stop Claude fast enough
     // The close handler will respawn automatically
     claude.kill('SIGTERM');
+
+    // Escalate if SIGTERM is ignored (e.g. stuck child process group).
+    // Without this, close never fires, isInterrupting stays true forever,
+    // and the session is dead - Escape does nothing until app restart.
+    // Pin the target so a respawned process can't be killed by mistake.
+    const target = claude;
+    setTimeout(() => {
+      if (target.exitCode === null && target.signalCode === null) {
+        debugLog("INTERRUPT", "SIGTERM ignored after 3s, escalating to SIGKILL");
+        try { target.kill('SIGKILL'); } catch { /* already gone */ }
+      }
+    }, 3000);
   }
 
   // Initial spawn
