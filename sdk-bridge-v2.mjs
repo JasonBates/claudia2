@@ -23,10 +23,28 @@ import { fileURLToPath } from "url";
 // Debug logging control - set CLAUDIA_DEBUG=1 to enable
 const DEBUG_ENABLED = process.env.CLAUDIA_DEBUG === "1";
 
+// Track the spawned Claude CLI child so every fatal-exit path can reap it.
+// Without this, a dying bridge orphans a CLI process that keeps running
+// (and spending API tokens) until it eventually notices stdin EOF.
+let claudeChild = null;
+function reapClaude(signal = "SIGTERM") {
+  try {
+    if (claudeChild && claudeChild.exitCode === null && !claudeChild.killed) {
+      claudeChild.kill(signal);
+    }
+  } catch {
+    // Best effort - the process may already be gone
+  }
+}
+
+// Last-chance synchronous reap, covers any process.exit() path
+process.on("exit", () => reapClaude());
+
 // Handle EPIPE errors gracefully - parent may close the pipe
 process.stdout.on('error', (err) => {
   if (err.code === 'EPIPE') {
-    // Parent closed stdout, exit gracefully
+    // Parent closed stdout, exit gracefully (reaping the CLI on the way out)
+    reapClaude();
     process.exit(0);
   }
   // Re-throw other errors
@@ -1817,6 +1835,14 @@ async function main() {
     isInterrupting = false;
     pendingCliResultAcks = [];
     lastStopReason = null;
+    // If the previous process died mid-warmup or mid-tool, these would
+    // otherwise leak into the new process: a stale isWarmingUp silently
+    // suppresses the user's entire next turn (events at the warmup guard,
+    // result at the warmup-complete ack).
+    isWarmingUp = false;
+    taskInputBuffer = "";
+    currentToolId = null;
+    currentToolName = null;
 
     claude = spawn(claudePath, buildClaudeArgs(resumeSessionId), {
       stdio: ["pipe", "pipe", "pipe"],
@@ -1825,8 +1851,16 @@ async function main() {
         MAX_THINKING_TOKENS: "10000"
       }
     });
+    claudeChild = claude;  // For fatal-exit reaping (see reapClaude)
 
     debugLog("SPAWN", `Claude PID: ${claude.pid}`);
+
+    // Without an error listener, an EPIPE on write (CLI died while we were
+    // sending) is an unhandled 'error' event that crashes the whole bridge,
+    // bypassing the respawn machinery. The close handler owns recovery.
+    claude.stdin.on("error", (err) => {
+      debugLog("CLAUDE_STDIN_ERROR", err.message);
+    });
 
     // Parse Claude's output
     claudeRl = readline.createInterface({ input: claude.stdout });
@@ -2439,6 +2473,12 @@ async function main() {
   // Send pending messages that were queued during respawn
   function sendPendingMessages() {
     if (pendingMessages.length > 0) {
+      // Keep messages queued if the process died again - the next respawn
+      // will retry. Writing to a dead pipe would just drop them.
+      if (!claude || !claude.stdin || !claude.stdin.writable) {
+        debugLog("PENDING", "Claude not writable, keeping messages queued");
+        return;
+      }
       debugLog("PENDING", `Sending ${pendingMessages.length} pending messages`);
       for (const msg of pendingMessages) {
         debugLog("PENDING_SEND", msg);
@@ -2938,6 +2978,34 @@ async function main() {
     if (claude) claude.kill();
     process.exit(0);
   });
+
+  // The Rust side's graceful shutdown sends SIGTERM. Without this handler,
+  // Node's default disposition kills the bridge instantly - claude.kill() never
+  // runs and the CLI is orphaned mid-generation. Forward the signal so the CLI
+  // can run its stop hooks, then exit.
+  for (const signal of ["SIGTERM", "SIGHUP"]) {
+    process.on(signal, () => {
+      debugLog("SIGNAL", `Received ${signal}, shutting down`);
+      isShuttingDown = true;
+      if (claude) claude.kill("SIGTERM");
+      process.exit(0);
+    });
+  }
+
+  // Crash paths must also reap the CLI. Node would exit on these anyway
+  // (uncaughtException always; unhandledRejection since v15) - these handlers
+  // preserve that behavior while ensuring the child doesn't outlive us.
+  for (const event of ["uncaughtException", "unhandledRejection"]) {
+    process.on(event, (err) => {
+      const message = err instanceof Error ? (err.stack || err.message) : String(err);
+      debugLog("FATAL", `${event}: ${message}`);
+      // stderr, not stdout: stdout may be the broken pipe that got us here
+      process.stderr.write(`[bridge] ${event}: ${message}\n`);
+      isShuttingDown = true;
+      if (claude) claude.kill("SIGTERM");
+      process.exit(1);
+    });
+  }
 }
 
 main().catch((e) => {
