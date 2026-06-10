@@ -377,47 +377,61 @@ pub fn spawn_claude_process_with_resume(
     Ok((sender, receiver, handle))
 }
 
+/// Parse an nvm directory name like "v18.17.0" into a numeric sort key.
+/// Non-numeric components sort as 0 (lowest).
+fn nvm_version_key(name: &str) -> (u32, u32, u32) {
+    let mut parts = name.trim_start_matches('v').split('.');
+    let mut next = || {
+        parts
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0)
+    };
+    (next(), next(), next())
+}
+
+/// Find the newest installed nvm node version directory.
+///
+/// Versions are compared numerically, NOT lexicographically: "v9.11.2"
+/// sorts after "v18.17.0" as a string ('9' > '1'), which previously made
+/// the bridge launch with an ancient node runtime whenever an old
+/// single-digit-major version was still installed.
+pub fn latest_nvm_version_dir(home: &Path) -> Option<PathBuf> {
+    let nvm_dir = home.join(".nvm/versions/node");
+    let entries = std::fs::read_dir(&nvm_dir).ok()?;
+    entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .max_by_key(|p| {
+            nvm_version_key(
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+                    .as_str(),
+            )
+        })
+}
+
 fn find_node_binary() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
 
     rust_debug_log("NODE", &format!("Looking for node, home={:?}", home));
 
     // Check nvm versions first (most common for macOS dev)
-    let nvm_dir = home.join(".nvm/versions/node");
-    rust_debug_log(
-        "NODE",
-        &format!(
-            "Checking nvm dir: {:?} exists={}",
-            nvm_dir,
-            nvm_dir.exists()
-        ),
-    );
-
-    if nvm_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
-            let mut versions: Vec<_> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect();
-            versions.sort();
-            rust_debug_log("NODE", &format!("Found nvm versions: {:?}", versions));
-
-            if let Some(latest) = versions.last() {
-                let node_path = latest.join("bin/node");
-                rust_debug_log(
-                    "NODE",
-                    &format!(
-                        "Checking nvm node: {:?} exists={}",
-                        node_path,
-                        node_path.exists()
-                    ),
-                );
-                if node_path.exists() {
-                    rust_debug_log("NODE", &format!("Using nvm node: {:?}", node_path));
-                    return Ok(node_path);
-                }
-            }
+    if let Some(latest) = latest_nvm_version_dir(&home) {
+        let node_path = latest.join("bin/node");
+        rust_debug_log(
+            "NODE",
+            &format!(
+                "Checking nvm node: {:?} exists={}",
+                node_path,
+                node_path.exists()
+            ),
+        );
+        if node_path.exists() {
+            rust_debug_log("NODE", &format!("Using nvm node: {:?}", node_path));
+            return Ok(node_path);
         }
     }
 
@@ -512,7 +526,9 @@ fn get_bridge_script_path() -> Result<PathBuf, String> {
 fn read_output_bounded(stdout: ChildStdout, tx: mpsc::Sender<ClaudeEvent>) {
     rust_debug_log("READER", "Starting read_output_bounded loop");
 
-    let reader = BufReader::with_capacity(1024, stdout);
+    // Bridge lines routinely carry multi-hundred-KB tool results; a tiny
+    // buffer means hundreds of read() syscalls per line on the hot path.
+    let reader = BufReader::with_capacity(64 * 1024, stdout);
 
     for line in reader.lines() {
         let line = match line {
@@ -1824,5 +1840,26 @@ mod tests {
     fn parse_interrupted() {
         let event = parse(json!({ "type": "interrupted" }));
         assert!(matches!(event, Some(ClaudeEvent::Interrupted)));
+    }
+
+    // ============================================================================
+    // nvm version ordering tests
+    // ============================================================================
+
+    #[test]
+    fn nvm_version_key_orders_numerically() {
+        // The historical bug: lexicographic ordering put v9 above v18
+        assert!(nvm_version_key("v18.17.0") > nvm_version_key("v9.11.2"));
+        assert!(nvm_version_key("v22.1.0") > nvm_version_key("v18.20.4"));
+        assert!(nvm_version_key("v18.20.4") > nvm_version_key("v18.2.4"));
+        assert!(nvm_version_key("v18.2.10") > nvm_version_key("v18.2.4"));
+    }
+
+    #[test]
+    fn nvm_version_key_handles_garbage() {
+        assert_eq!(nvm_version_key("not-a-version"), (0, 0, 0));
+        assert_eq!(nvm_version_key(""), (0, 0, 0));
+        // Real versions always beat unparseable directory names
+        assert!(nvm_version_key("v8.0.0") > nvm_version_key(".DS_Store"));
     }
 }

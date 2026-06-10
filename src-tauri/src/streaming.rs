@@ -6,11 +6,19 @@
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use tauri::ipc::Channel;
 
 use crate::events::CommandEvent;
+
+/// Wall-clock limit for a streamed command. Without one, a hung command
+/// (e.g. an interactive program waiting on stdin) leaks the child process
+/// and both reader threads forever.
+const STREAMING_COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Configuration for a streaming command
 pub struct StreamingCommand {
@@ -39,18 +47,12 @@ fn find_binary(name: &str) -> Option<PathBuf> {
         }
     }
 
-    // Fall back to searching in nvm node path (for node-based tools)
-    let nvm_dir = home.join(".nvm/versions/node");
-    if nvm_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
-            let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-            versions.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
-            if let Some(latest) = versions.first() {
-                let bin_path = latest.path().join("bin").join(name);
-                if bin_path.exists() {
-                    return Some(bin_path);
-                }
-            }
+    // Fall back to searching in nvm node path (for node-based tools).
+    // Numeric version ordering - see latest_nvm_version_dir.
+    if let Some(latest) = crate::claude_process::latest_nvm_version_dir(&home) {
+        let bin_path = latest.join("bin").join(name);
+        if bin_path.exists() {
+            return Some(bin_path);
         }
     }
 
@@ -104,6 +106,9 @@ pub fn run_streaming(
     // Build the command with resolved path
     let mut command = Command::new(&resolved_program);
     command.args(&cmd.args);
+    // Null stdin so interactive programs fail fast instead of hanging on a
+    // pipe that will never receive input.
+    command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
@@ -128,6 +133,38 @@ pub fn run_streaming(
     // Take ownership of stdout and stderr
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
+
+    // Watchdog: kill the child if it outlives the wall-clock timeout.
+    // Signals by PID so the main thread keeps exclusive ownership of `child`
+    // for wait(). `finished` closes the (already tiny) PID-reuse window.
+    let finished = Arc::new(AtomicBool::new(false));
+    let watchdog_finished = Arc::clone(&finished);
+    let watchdog_channel = channel.clone();
+    let watchdog_id = command_id.clone();
+    let child_pid = child.id() as i32;
+    let watchdog = thread::spawn(move || {
+        let deadline = Instant::now() + STREAMING_COMMAND_TIMEOUT;
+        while !watchdog_finished.load(Ordering::Relaxed) {
+            if Instant::now() >= deadline {
+                eprintln!(
+                    "[STREAMING] Command timed out after {:?}, killing pid {}",
+                    STREAMING_COMMAND_TIMEOUT, child_pid
+                );
+                let _ = watchdog_channel.send(CommandEvent::Error {
+                    command_id: watchdog_id,
+                    message: format!(
+                        "Command timed out after {} seconds and was killed",
+                        STREAMING_COMMAND_TIMEOUT.as_secs()
+                    ),
+                });
+                unsafe {
+                    libc::kill(child_pid, libc::SIGKILL);
+                }
+                return;
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
 
     // Spawn thread for stdout
     let stdout_channel = channel.clone();
@@ -191,6 +228,11 @@ pub fn run_streaming(
     let status = child
         .wait()
         .map_err(|e| format!("Failed to wait for process: {}", e))?;
+
+    // Stop the watchdog. Don't join - it exits on its own within one poll
+    // interval, and joining would delay the Completed event by up to 500ms.
+    finished.store(true, Ordering::Relaxed);
+    drop(watchdog);
 
     // Emit completion event
     channel
