@@ -155,7 +155,7 @@ fn list_sessions_sync(working_dir: &str) -> Result<Vec<SessionEntry>, String> {
     );
 
     // Sort by modification time descending (newest first)
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     // Minimum age before a warmup-only session file may be deleted. A freshly
     // started session looks "warmup-only" until the user submits their first
