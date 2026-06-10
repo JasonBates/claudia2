@@ -277,17 +277,23 @@ export function usePermissions(options: UsePermissionsOptions): UsePermissionsRe
     const permission = pendingPermission();
     if (!permission) return;
 
-    dequeuePermission(permission.requestId);
-
-    // Use the appropriate response mechanism based on the request source:
-    // - "control": stream-based response (control_response via stdin)
-    // - "hook": file-based response (for MCP hook compatibility)
-    if (permission.source === "control") {
-      await sendPermissionResponse(permission.requestId, true, remember, permission.toolInput);
-      console.log("[usePermissions] Allowed (stream):", permission.toolName);
-    } else {
-      await respondToPermission(true);
-      console.log("[usePermissions] Allowed (file/hook):", permission.toolName);
+    // Send FIRST, dequeue on success. Dequeue-first dropped the dialog even
+    // when the send failed (bridge restarting, stdin closed), leaving Claude
+    // waiting forever on the control_request with no UI to retry from.
+    try {
+      // Use the appropriate response mechanism based on the request source:
+      // - "control": stream-based response (control_response via stdin)
+      // - "hook": file-based response (for MCP hook compatibility)
+      if (permission.source === "control") {
+        await sendPermissionResponse(permission.requestId, true, remember, permission.toolInput);
+        console.log("[usePermissions] Allowed (stream):", permission.toolName);
+      } else {
+        await respondToPermission(true);
+        console.log("[usePermissions] Allowed (file/hook):", permission.toolName);
+      }
+      dequeuePermission(permission.requestId);
+    } catch (e) {
+      console.error("[usePermissions] Failed to send allow response, keeping dialog:", e);
     }
   };
 
@@ -298,17 +304,21 @@ export function usePermissions(options: UsePermissionsOptions): UsePermissionsRe
     const permission = pendingPermission();
     if (!permission) return;
 
-    dequeuePermission(permission.requestId);
-
-    // Use the appropriate response mechanism based on the request source:
-    // - "control": stream-based response (control_response via stdin)
-    // - "hook": file-based response (for MCP hook compatibility)
-    if (permission.source === "control") {
-      await sendPermissionResponse(permission.requestId, false, false, permission.toolInput);
-      console.log("[usePermissions] Denied (stream):", permission.toolName);
-    } else {
-      await respondToPermission(false, "User denied permission");
-      console.log("[usePermissions] Denied (file/hook):", permission.toolName);
+    // Send FIRST, dequeue on success - see handlePermissionAllow.
+    try {
+      // Use the appropriate response mechanism based on the request source:
+      // - "control": stream-based response (control_response via stdin)
+      // - "hook": file-based response (for MCP hook compatibility)
+      if (permission.source === "control") {
+        await sendPermissionResponse(permission.requestId, false, false, permission.toolInput);
+        console.log("[usePermissions] Denied (stream):", permission.toolName);
+      } else {
+        await respondToPermission(false, "User denied permission");
+        console.log("[usePermissions] Denied (file/hook):", permission.toolName);
+      }
+      dequeuePermission(permission.requestId);
+    } catch (e) {
+      console.error("[usePermissions] Failed to send deny response, keeping dialog:", e);
     }
   };
 

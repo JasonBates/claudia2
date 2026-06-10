@@ -1,4 +1,4 @@
-import { createSignal, createEffect, onMount, onCleanup, Show, ErrorBoundary, getOwner } from "solid-js";
+import { createSignal, createEffect, on, onMount, onCleanup, Show, ErrorBoundary, getOwner } from "solid-js";
 import { batch, runWithOwner } from "solid-js";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -301,6 +301,59 @@ function App() {
   };
 
   /**
+   * Decide the no-explicit-directory startup flow: show the project picker
+   * (2+ projects), reopen in the single project's directory, or just start.
+   * Shared by onMount and handleCheckClaudeCodeAgain (previously copy-pasted,
+   * and the copies had started to drift).
+   */
+  const decideStartupFlow = async () => {
+    try {
+      setProjectsLoading(true);
+      const projects = await listProjects();
+      setProjectList(projects);
+      setProjectsLoading(false);
+
+      if (projects.length >= 2) {
+        // Multiple projects - show picker, don't start session yet
+        console.log("[STARTUP] Multiple projects found, showing picker");
+        setStartupPickerMode(true);
+        setProjectPickerOpen(true);
+      } else if (projects.length === 1) {
+        // Single project - check if we need to reopen
+        const launchDir = await getLaunchDir();
+        if (launchDir !== projects[0].decodedPath) {
+          console.log("[STARTUP] Single project, reopening in:", projects[0].decodedPath);
+          await reopenInDirectory(projects[0].decodedPath);
+          return; // App will restart
+        }
+        await continueWithStartup();
+      } else {
+        // No projects - open in home (existing behavior)
+        await continueWithStartup();
+      }
+    } catch (e) {
+      // Error loading projects - show picker with error and fallback option
+      console.error("[STARTUP] Failed to load projects:", e);
+      setProjectsLoading(false);
+      setProjectLoadError(String(e));
+      setStartupPickerMode(true);
+      setProjectPickerOpen(true);
+    }
+  };
+
+  /**
+   * Start the quiet update check plus its periodic re-check (every 4 hours).
+   * Idempotent so both startup paths can call it safely.
+   */
+  const setupUpdateChecks = () => {
+    checkForUpdatesQuietly();
+    if (updateCheckInterval) {
+      clearInterval(updateCheckInterval);
+    }
+    updateCheckInterval = setInterval(checkForUpdatesQuietly, 4 * 60 * 60 * 1000);
+  };
+
+  /**
    * Re-check if Claude Code is installed (called from install prompt)
    */
   const handleCheckClaudeCodeAgain = async () => {
@@ -315,36 +368,17 @@ function App() {
         if (wasExplicitlyLaunched) {
           await continueWithStartup();
         } else {
-          // Check projects for picker logic
-          try {
-            setProjectsLoading(true);
-            const projects = await listProjects();
-            setProjectList(projects);
-            setProjectsLoading(false);
-
-            if (projects.length >= 2) {
-              setStartupPickerMode(true);
-              setProjectPickerOpen(true);
-            } else if (projects.length === 1) {
-              const launchDir = await getLaunchDir();
-              if (launchDir !== projects[0].decodedPath) {
-                await reopenInDirectory(projects[0].decodedPath);
-                return;
-              }
-              await continueWithStartup();
-            } else {
-              await continueWithStartup();
-            }
-          } catch (e) {
-            setProjectsLoading(false);
-            setProjectLoadError(String(e));
-            setStartupPickerMode(true);
-            setProjectPickerOpen(true);
-          }
+          await decideStartupFlow();
         }
+        // This path previously never installed the update checks, so users
+        // who installed Claude Code after the prompt got no update banners.
+        setupUpdateChecks();
       } else {
         console.log("[INSTALL_CHECK] Claude Code still not found");
       }
+    } catch (e) {
+      console.error("[INSTALL_CHECK] Startup failed:", e);
+      store.dispatch(actions.setSessionError(`Startup failed: ${e}`));
     } finally {
       setIsCheckingInstall(false);
     }
@@ -620,6 +654,15 @@ function App() {
     // array in place when CLEAR_QUESTION_PANEL sets pending to [].
     const questions = [...store.pendingQuestions()];
 
+    // Duplicate-call guard: if the panel was already cleared (no request ID
+    // and no pending questions), a second onAnswer for the same interaction
+    // must not fall through to the handleSubmit fallback below - that would
+    // send the answer text to Claude as a brand-new chat prompt.
+    if (!requestId && questions.length === 0) {
+      console.log("[QUESTION_ANSWER] Panel already cleared, ignoring duplicate answer");
+      return;
+    }
+
     store.dispatch(actions.clearQuestionPanel());
 
     requestAnimationFrame(() => {
@@ -769,7 +812,9 @@ function App() {
     const content = store.planContent();
     if (planWindowOpen() && content) {
       console.log("[PLAN_CONTENT] Emitting update to plan-viewer");
-      emitTo("plan-viewer", "plan-content-updated", content);
+      emitTo("plan-viewer", "plan-content-updated", content).catch(() => {
+        // Plan viewer window may have been closed, ignore errors
+      });
     }
   });
 
@@ -813,21 +858,27 @@ function App() {
     }
   });
 
-  // Handle plan window closed externally (user clicked X) while awaiting approval
-  createEffect(() => {
-    const planning = store.isPlanning();
-    const ready = store.planReady();
-    const windowOpen = planWindowOpen();
-    const requestId = store.planPermissionRequestId();
+  // Handle plan window closed externally (user clicked X) while awaiting approval.
+  // Only react to an actual open -> closed TRANSITION: when ExitPlanMode arrives
+  // before the (async) window creation completes, windowOpen is still false, and
+  // a plain effect here would race the auto-open effect and silently auto-DENY
+  // the plan the moment it became ready.
+  createEffect(
+    on(planWindowOpen, (open, prevOpen) => {
+      if (prevOpen !== true || open) return;
+      const planning = store.isPlanning();
+      const ready = store.planReady();
+      const requestId = store.planPermissionRequestId();
 
-    if (planning && ready && !windowOpen && requestId) {
-      console.log("[PLAN_CLOSE] Plan window closed externally, cancelling plan");
-      store.dispatch(actions.exitPlanning());
-      sendPermissionResponse(requestId, false, false).catch(err => {
-        console.error("[PLAN_CLOSE] Failed to send denial:", err);
-      });
-    }
-  });
+      if (planning && ready && requestId) {
+        console.log("[PLAN_CLOSE] Plan window closed externally, cancelling plan");
+        store.dispatch(actions.exitPlanning());
+        sendPermissionResponse(requestId, false, false).catch(err => {
+          console.error("[PLAN_CLOSE] Failed to send denial:", err);
+        });
+      }
+    }, { defer: true })
+  );
 
   // Re-read plan file when Edit tool modifies it
   createEffect(() => {
@@ -1336,88 +1387,60 @@ function App() {
       console.error("[MOUNT] Failed to register background event listener:", err);
     }
 
-    // Check if Claude Code CLI is installed before proceeding
-    console.log("[MOUNT] Checking for Claude Code CLI...");
-    const claudeStatus = await checkClaudeCodeInstalled();
-    if (!claudeStatus.installed) {
-      console.log("[MOUNT] Claude Code CLI not found, showing install prompt");
-      setShowInstallPrompt(true);
-      return; // Don't proceed with startup until installed
-    }
-    console.log("[MOUNT] Claude Code CLI found:", claudeStatus.version, "at", claudeStatus.path);
-
-    // Check if this app was launched with an explicit directory (via CLI arg or reopen)
-    // If so, skip the project picker and start directly in that directory
-    const wasExplicitlyLaunched = await hasCliDirectory();
-    if (wasExplicitlyLaunched) {
-      const pendingResume = await getPendingResume();
-      if (pendingResume) {
-        console.log("[MOUNT] --resume flag detected, auto-resuming session:", pendingResume);
-        await continueWithStartup();
-        // workingDir is set by startSession() inside continueWithStartup(),
-        // so we can resume immediately — no setTimeout needed.
-        await handleResumeSession(pendingResume);
-      } else {
-        console.log("[MOUNT] Explicit CLI directory provided, skipping picker");
-        await continueWithStartup();
+    // Startup flow. Guarded as a whole: an unhandled rejection here would
+    // silently kill the rest of onMount - no session, no error banner, no
+    // update checks - leaving the app sitting disconnected.
+    try {
+      // Check if Claude Code CLI is installed before proceeding
+      console.log("[MOUNT] Checking for Claude Code CLI...");
+      const claudeStatus = await checkClaudeCodeInstalled();
+      if (!claudeStatus.installed) {
+        console.log("[MOUNT] Claude Code CLI not found, showing install prompt");
+        setShowInstallPrompt(true);
+        return; // Don't proceed with startup until installed
       }
+      console.log("[MOUNT] Claude Code CLI found:", claudeStatus.version, "at", claudeStatus.path);
 
-      // If the launch-intent file included a `prompt`, fire it now through
-      // the normal submit path so it appears as a regular user message.
-      // Runs after any --resume so the prompt lands on the resumed session.
-      try {
-        const pendingPrompt = await getPendingPrompt();
-        if (pendingPrompt) {
-          console.log("[MOUNT] Auto-submitting pending prompt (len=" + pendingPrompt.length + ")");
-          // Fire-and-forget: handleSubmit awaits internally. Don't block mount on it.
-          void handleSubmit(pendingPrompt);
-        }
-      } catch (err) {
-        console.error("[MOUNT] Failed to fetch pending prompt:", err);
-      }
-    } else {
-      // Check how many projects exist to decide startup flow
-      try {
-        setProjectsLoading(true);
-        const projects = await listProjects();
-        setProjectList(projects);
-        setProjectsLoading(false);
-
-        if (projects.length >= 2) {
-          // Multiple projects - show picker, don't start session yet
-          console.log("[MOUNT] Multiple projects found, showing picker");
-          setStartupPickerMode(true);
-          setProjectPickerOpen(true);
-        } else if (projects.length === 1) {
-          // Single project - check if we need to reopen
-          const launchDir = await getLaunchDir();
-          if (launchDir !== projects[0].decodedPath) {
-            // Not in the right directory, reopen there
-            console.log("[MOUNT] Single project, reopening in:", projects[0].decodedPath);
-            await reopenInDirectory(projects[0].decodedPath);
-            return; // App will restart
-          }
-          // Already in right dir, continue with normal startup
+      // Check if this app was launched with an explicit directory (via CLI arg or reopen)
+      // If so, skip the project picker and start directly in that directory
+      const wasExplicitlyLaunched = await hasCliDirectory();
+      if (wasExplicitlyLaunched) {
+        const pendingResume = await getPendingResume();
+        if (pendingResume) {
+          console.log("[MOUNT] --resume flag detected, auto-resuming session:", pendingResume);
           await continueWithStartup();
+          // workingDir is set by startSession() inside continueWithStartup(),
+          // so we can resume immediately — no setTimeout needed.
+          await handleResumeSession(pendingResume);
         } else {
-          // No projects - open in home (existing behavior)
+          console.log("[MOUNT] Explicit CLI directory provided, skipping picker");
           await continueWithStartup();
         }
-      } catch (e) {
-        // Error loading projects - show picker with error and fallback option
-        console.error("[MOUNT] Failed to load projects:", e);
-        setProjectsLoading(false);
-        setProjectLoadError(String(e));
-        setStartupPickerMode(true);
-        setProjectPickerOpen(true);
+
+        // If the launch-intent file included a `prompt`, fire it now through
+        // the normal submit path so it appears as a regular user message.
+        // Runs after any --resume so the prompt lands on the resumed session.
+        try {
+          const pendingPrompt = await getPendingPrompt();
+          if (pendingPrompt) {
+            console.log("[MOUNT] Auto-submitting pending prompt (len=" + pendingPrompt.length + ")");
+            // Fire-and-forget: handleSubmit awaits internally. Don't block mount on it.
+            void handleSubmit(pendingPrompt);
+          }
+        } catch (err) {
+          console.error("[MOUNT] Failed to fetch pending prompt:", err);
+        }
+      } else {
+        // Check how many projects exist to decide startup flow
+        await decideStartupFlow();
       }
+    } catch (e) {
+      console.error("[MOUNT] Startup failed:", e);
+      store.dispatch(actions.setSessionError(`Startup failed: ${e}`));
     }
 
-    // Check for updates in the background (non-blocking)
-    checkForUpdatesQuietly();
-
-    // Set up periodic update check (every 4 hours)
-    updateCheckInterval = setInterval(checkForUpdatesQuietly, 4 * 60 * 60 * 1000);
+    // Quiet update check now + every 4 hours (runs even if startup errored)
+    setupUpdateChecks();
   });
 
   onCleanup(() => {
