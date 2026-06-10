@@ -10,7 +10,7 @@ import { describe, it, expect } from "vitest";
 import { conversationReducer } from "../../lib/store/reducer";
 import { createInitialState } from "../../lib/store/types";
 import type { Message, ToolUse, Todo, Question } from "../../lib/types";
-import type { PermissionRequest, SessionInfo } from "../../lib/event-handlers";
+import type { PermissionRequest, SessionInfo } from "../../lib/types";
 
 describe("conversationReducer", () => {
   // =========================================================================

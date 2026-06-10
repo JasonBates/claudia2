@@ -87,6 +87,9 @@ pub async fn stop_session(state: State<'_, AppState>) -> Result<(), String> {
     // Tear down off the locks - ProcessHandle::drop blocks up to ~5s in shutdown()
     teardown_process_state(&state.sender, &state.receiver, &state.process_handle).await;
 
+    // Remove any stale permission IPC files for this app session
+    let _ = super::secure_ipc::cleanup_session_files(&state.session_id);
+
     Ok(())
 }
 

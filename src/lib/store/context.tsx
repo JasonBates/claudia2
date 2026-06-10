@@ -21,7 +21,7 @@ import { createStreamingRefs } from "./refs";
 import type { Action } from "./actions";
 import { conversationReducer } from "./reducer";
 import type { ToolUse, ContentBlock, Message, Todo, Question, SubagentInfo } from "../types";
-import type { SessionInfo, PermissionRequest } from "../event-handlers";
+import type { SessionInfo, PermissionRequest } from "../types";
 
 /**
  * Store context value - provides state, dispatch, and convenience accessors.

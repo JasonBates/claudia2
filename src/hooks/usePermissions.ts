@@ -1,7 +1,7 @@
 import { createSignal, createEffect, Accessor, Setter, runWithOwner, batch, Owner } from "solid-js";
 import { pollPermissionRequest, respondToPermission, sendPermissionResponse, reviewPermissionRequest } from "../lib/tauri";
 import type { Mode } from "../lib/mode-utils";
-import type { PermissionRequest } from "../lib/event-handlers";
+import type { PermissionRequest } from "../lib/types";
 import type { ReviewResult } from "../lib/store/types";
 
 export interface UsePermissionsReturn {

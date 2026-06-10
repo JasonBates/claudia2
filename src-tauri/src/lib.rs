@@ -1,12 +1,9 @@
 mod claude_process;
 mod commands;
 mod config;
-pub mod error;
 mod events;
 pub mod llm_reviewer;
-pub mod response_state;
 mod streaming;
-pub mod timeouts;
 pub mod warmup;
 
 use commands::{cmd_debug_enabled, cmd_debug_log, AppState};

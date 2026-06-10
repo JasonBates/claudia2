@@ -41,7 +41,7 @@ import type {
 import type { Action } from "./actions";
 import type { StreamingRefs } from "./types";
 import type { ToolUse, SubagentInfo, Question } from "../types";
-import type { PermissionRequest, SessionInfo } from "../event-handlers";
+import type { PermissionRequest, SessionInfo } from "../types";
 import { parseToolInput } from "../json-streamer";
 
 /**

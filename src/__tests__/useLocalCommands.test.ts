@@ -9,7 +9,7 @@ import {
 import type { UseSessionReturn } from "../hooks/useSession";
 import type { UseSidebarReturn } from "../hooks/useSidebar";
 import type { Message, ToolUse, ContentBlock, SessionEntry } from "../lib/types";
-import type { SessionInfo } from "../lib/event-handlers";
+import type { SessionInfo } from "../lib/types";
 
 // Mock the tauri module
 vi.mock("../lib/tauri", () => ({

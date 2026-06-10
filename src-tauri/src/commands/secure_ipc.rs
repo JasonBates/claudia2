@@ -107,49 +107,9 @@ pub fn verify_file_security_from_handle(_file: &std::fs::File) -> Result<(), Str
     Ok(())
 }
 
-/// Legacy path-based verification - prefer verify_file_security_from_handle
-/// to avoid TOCTOU vulnerabilities
-#[cfg(unix)]
-#[allow(dead_code)]
-pub fn verify_file_security(path: &PathBuf) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
-
-    let metadata = fs::metadata(path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
-
-    // Verify it's a regular file
-    if !metadata.is_file() {
-        return Err("Path is not a regular file".to_string());
-    }
-
-    // Verify owner is current user
-    let file_uid = metadata.uid();
-    let current_uid = unsafe { libc::getuid() };
-    if file_uid != current_uid {
-        return Err(format!(
-            "File owner mismatch: expected {}, got {}",
-            current_uid, file_uid
-        ));
-    }
-
-    // Verify permissions are 0600 (no group/other access)
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(format!(
-            "Insecure file permissions: {:o} (expected 0600)",
-            mode
-        ));
-    }
-
-    Ok(())
-}
-
-#[cfg(not(unix))]
-#[allow(dead_code)]
-pub fn verify_file_security(_path: &PathBuf) -> Result<(), String> {
-    // On non-Unix platforms, skip permission verification
-    // Windows has different ACL-based security model
-    Ok(())
-}
+// NOTE: a legacy path-based verify_file_security() used to live here; it was
+// dead code that re-introduced the TOCTOU window the handle-based version
+// above was written to close, so it was removed.
 
 /// Atomically write a file with secure permissions (0600)
 /// Uses temp file + rename pattern to prevent partial reads
@@ -263,8 +223,9 @@ pub fn read_ipc_message(path: &PathBuf) -> Result<serde_json::Value, String> {
     serde_json::from_str(&content).map_err(|e| format!("Failed to parse message: {}", e))
 }
 
-/// Clean up IPC files for a session
-#[allow(dead_code)]
+/// Clean up IPC files for a session.
+/// Called from stop_session so stale permission-request/response files
+/// don't accumulate in the app-private IPC directory.
 pub fn cleanup_session_files(session_id: &str) -> Result<(), String> {
     if let Ok(request_path) = get_permission_request_path(session_id) {
         let _ = fs::remove_file(request_path);
