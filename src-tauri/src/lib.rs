@@ -26,17 +26,26 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_webdriver::init());
     }
 
-    builder.setup(|app| {
+    builder
+        .setup(|app| {
             if cmd_debug_enabled() {
-                cmd_debug_log("SETUP", &format!("Raw args: {:?}", std::env::args().collect::<Vec<_>>()));
+                cmd_debug_log(
+                    "SETUP",
+                    &format!("Raw args: {:?}", std::env::args().collect::<Vec<_>>()),
+                );
             }
 
             // Parse CLI arguments (with diagnostic logging instead of silent .ok())
             let cli_matches = match app.cli().matches() {
                 Ok(matches) => {
                     if cmd_debug_enabled() {
-                        cmd_debug_log("SETUP", &format!("CLI parsed OK: {:?}",
-                            matches.args.keys().collect::<Vec<_>>()));
+                        cmd_debug_log(
+                            "SETUP",
+                            &format!(
+                                "CLI parsed OK: {:?}",
+                                matches.args.keys().collect::<Vec<_>>()
+                            ),
+                        );
                     }
                     Some(matches)
                 }
@@ -61,23 +70,38 @@ pub fn run() {
             });
 
             if cmd_debug_enabled() {
-                cmd_debug_log("SETUP", &format!("CLI: dir={:?}, resume={:?}", cli_dir, cli_resume));
+                cmd_debug_log(
+                    "SETUP",
+                    &format!("CLI: dir={:?}, resume={:?}", cli_dir, cli_resume),
+                );
             }
 
             // Check for file-based launch intent (from recall skill or external tools).
             // This sidesteps macOS Launch Services not reliably passing CLI args to app bundles.
-            let LaunchIntent { directory: file_dir, session_id: file_resume, prompt, result_socket } =
-                read_pending_launch();
+            let LaunchIntent {
+                directory: file_dir,
+                session_id: file_resume,
+                prompt,
+                result_socket,
+            } = read_pending_launch();
 
             // File-based intent fills in any gaps left by CLI parsing
             let final_dir = cli_dir.or(file_dir);
             let final_resume = cli_resume.or(file_resume);
 
             if cmd_debug_enabled() {
-                cmd_debug_log("SETUP", &format!(
-                    "Final: dir={:?}, resume={:?}, prompt={:?}, socket={:?}",
-                    final_dir, final_resume, prompt.as_ref().map(|s| s.chars().take(40).collect::<String>()), result_socket
-                ));
+                cmd_debug_log(
+                    "SETUP",
+                    &format!(
+                        "Final: dir={:?}, resume={:?}, prompt={:?}, socket={:?}",
+                        final_dir,
+                        final_resume,
+                        prompt
+                            .as_ref()
+                            .map(|s| s.chars().take(40).collect::<String>()),
+                        result_socket
+                    ),
+                );
             }
 
             // Create and manage AppState with CLI directory and optional resume session
@@ -141,7 +165,8 @@ pub fn run() {
             commands::bot_config::validate_bot_api_key,
             // Window commands
             commands::window_cmd::activate_app,
-        ]).run(tauri::generate_context!())
+        ])
+        .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
@@ -158,7 +183,12 @@ struct LaunchIntent {
 
 impl LaunchIntent {
     fn empty() -> Self {
-        Self { directory: None, session_id: None, prompt: None, result_socket: None }
+        Self {
+            directory: None,
+            session_id: None,
+            prompt: None,
+            result_socket: None,
+        }
     }
 }
 
@@ -208,11 +238,18 @@ fn read_pending_launch() -> LaunchIntent {
     }
 
     if cmd_debug_enabled() {
-        cmd_debug_log("SETUP", &format!("Found {} pending-launch file(s)", entries.len()));
+        cmd_debug_log(
+            "SETUP",
+            &format!("Found {} pending-launch file(s)", entries.len()),
+        );
     }
 
     // Parse all files, pick the freshest non-stale one
-    let mut best: Option<(LaunchIntent, chrono::DateTime<chrono::FixedOffset>, std::path::PathBuf)> = None;
+    let mut best: Option<(
+        LaunchIntent,
+        chrono::DateTime<chrono::FixedOffset>,
+        std::path::PathBuf,
+    )> = None;
     let now = chrono::Utc::now();
 
     for entry in &entries {
@@ -242,14 +279,30 @@ fn read_pending_launch() -> LaunchIntent {
         }
 
         let intent = LaunchIntent {
-            directory: json.get("directory").and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty()),
-            session_id: json.get("sessionId").and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty()),
-            prompt: json.get("prompt").and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty()),
-            result_socket: json.get("resultSocket").and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty()),
+            directory: json
+                .get("directory")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .filter(|s| !s.is_empty()),
+            session_id: json
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .filter(|s| !s.is_empty()),
+            prompt: json
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .filter(|s| !s.is_empty()),
+            result_socket: json
+                .get("resultSocket")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .filter(|s| !s.is_empty()),
         };
 
         // Keep the freshest (most recent timestamp)
-        if best.as_ref().map_or(true, |(_, t, _)| file_time > *t) {
+        if best.as_ref().is_none_or(|(_, t, _)| file_time > *t) {
             best = Some((intent, file_time, path.clone()));
         }
     }

@@ -41,6 +41,12 @@ echo "  Updated src-tauri/tauri.conf.json"
 sed -i '' "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
 echo "  Updated src-tauri/Cargo.toml"
 
+# Sync Cargo.lock with the new version. Without this, a bump-commit-tag
+# sequence that skips a local build ships a stale lockfile.
+(cd src-tauri && cargo update -p claudia2 --precise "$VERSION" --offline 2>/dev/null \
+  || cargo update -p claudia2 --precise "$VERSION")
+echo "  Updated src-tauri/Cargo.lock"
+
 echo ""
 echo "Version bumped to $VERSION"
 echo ""

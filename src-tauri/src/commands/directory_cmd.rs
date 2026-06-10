@@ -51,7 +51,10 @@ pub async fn open_new_window_with_picker() -> Result<(), String> {
     match result {
         Ok(child) => {
             reap_in_background(child);
-            cmd_debug_log("NEW_WINDOW", "New window (with picker) spawned successfully");
+            cmd_debug_log(
+                "NEW_WINDOW",
+                "New window (with picker) spawned successfully",
+            );
             Ok(())
         }
         Err(e) => {
@@ -72,7 +75,10 @@ pub async fn open_new_window_with_picker() -> Result<(), String> {
 pub async fn open_new_window(directory: String, model: Option<String>) -> Result<(), String> {
     cmd_debug_log(
         "NEW_WINDOW",
-        &format!("open_new_window called with: {} model={:?}", directory, model),
+        &format!(
+            "open_new_window called with: {} model={:?}",
+            directory, model
+        ),
     );
 
     // Validate the directory exists

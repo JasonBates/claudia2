@@ -12,7 +12,7 @@ set -uo pipefail
 trap '' PIPE
 
 # Configuration
-APP_SUPPORT_DIR="$HOME/Library/Application Support/com.jasonbates.claudia"
+APP_SUPPORT_DIR="$HOME/Library/Application Support/com.jasonbates.claudia2"
 CLAUDE_PROJECTS_DIR="$HOME/.claude/projects"
 OUTPUT_FILE="${1:-/tmp/claudia-debug-$(date +%Y%m%d-%H%M%S).md}"
 SESSION_ID="${2:-}"
@@ -41,10 +41,10 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
     echo "## 1. Process Status"
     echo ""
     echo "\`\`\`"
-    if pgrep -f "Claudia.app" > /dev/null 2>&1; then
-        ps -o pid,state,%cpu,%mem,etime,command -p $(pgrep -f "Claudia.app" | tr '\n' ',') 2>/dev/null | head -5
+    if pgrep -f "Claudia2\\.app" > /dev/null 2>&1; then
+        ps -o pid,state,%cpu,%mem,etime,command -p $(pgrep -f "Claudia2\\.app" | tr '\n' ',') 2>/dev/null | head -5
     else
-        echo "Claudia not running"
+        echo "Claudia2 not running"
     fi
     echo "\`\`\`"
     echo ""
@@ -65,7 +65,7 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
         tail -$RUST_LOG_LINES "$RUST_LOG"
         echo "\`\`\`"
     else
-        log_warn "No Rust debug log. Run: CLAUDIA_DEBUG=1 /Applications/Claudia.app/Contents/MacOS/Claudia"
+        log_warn "No Rust debug log. Run: CLAUDIA_DEBUG=1 /Applications/Claudia2.app/Contents/MacOS/claudia2"
         echo "**No Rust debug log found** - run with CLAUDIA_DEBUG=1"
     fi
     echo ""
@@ -137,7 +137,7 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
     echo ""
     echo "| Check | Status |"
     echo "|-------|--------|"
-    CLAUDIA_PID=$(pgrep -f "Claudia.app/Contents/MacOS/Claudia" | head -1)
+    CLAUDIA_PID=$(pgrep -f "Claudia2.app/Contents/MacOS/claudia2" | head -1)
     if [[ -n "$CLAUDIA_PID" ]]; then
         echo "| Claudia running | ✅ PID $CLAUDIA_PID |"
         OPEN_FILES=$(lsof -p "$CLAUDIA_PID" 2>/dev/null | wc -l | tr -d ' ')

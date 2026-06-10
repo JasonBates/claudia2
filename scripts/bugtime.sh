@@ -56,11 +56,11 @@ read -p "Open Claudia now? (Y/n) " -n 1 -r
 echo ""
 if [[ ! $REPLY =~ ^[Nn]$ ]]; then
     # Open Claudia
-    if [[ -d "/Applications/Claudia.app" ]]; then
-        open -a "Claudia"
-    elif [[ -d "$HOME/Applications/Claudia.app" ]]; then
-        open -a "$HOME/Applications/Claudia.app"
+    if [[ -d "/Applications/Claudia2.app" ]]; then
+        open -a "Claudia2"
+    elif [[ -d "$HOME/Applications/Claudia2.app" ]]; then
+        open -a "$HOME/Applications/Claudia2.app"
     else
-        echo "Claudia.app not found in Applications"
+        echo "Claudia2.app not found in Applications"
     fi
 fi

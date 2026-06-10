@@ -132,8 +132,9 @@ impl AppState {
     ) -> Self {
         // Track if a directory was explicitly provided (via CLI arg, env var, or --resume)
         // This is used to skip the project picker on reopen
-        let has_cli_directory =
-            cli_dir.is_some() || resume_session_id.is_some() || std::env::var("CLAUDIA_LAUNCH_DIR").ok().is_some();
+        let has_cli_directory = cli_dir.is_some()
+            || resume_session_id.is_some()
+            || std::env::var("CLAUDIA_LAUNCH_DIR").ok().is_some();
 
         // Use CLI directory if provided, then check CLAUDIA_LAUNCH_DIR env var,
         // otherwise default to home directory.

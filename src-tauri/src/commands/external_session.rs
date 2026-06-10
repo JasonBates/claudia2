@@ -34,10 +34,7 @@ pub enum ExternalEvent<'a> {
 
     /// Sent when something goes wrong before `done` is emitted. After this,
     /// the writer is closed.
-    Error {
-        message: &'a str,
-        code: &'a str,
-    },
+    Error { message: &'a str, code: &'a str },
 }
 
 /// Owns the connected socket writer. Drop = socket closed = caller's read returns EOF.
@@ -52,7 +49,10 @@ impl ExternalSession {
     pub async fn connect(socket_path: &str) -> Option<Self> {
         match UnixStream::connect(socket_path).await {
             Ok(stream) => {
-                cmd_debug_log("EXTERNAL", &format!("Connected to result socket: {}", socket_path));
+                cmd_debug_log(
+                    "EXTERNAL",
+                    &format!("Connected to result socket: {}", socket_path),
+                );
                 Some(Self { stream })
             }
             Err(e) => {

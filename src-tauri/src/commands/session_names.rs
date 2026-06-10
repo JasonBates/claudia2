@@ -52,8 +52,7 @@ fn save_session_names(names: &SessionNames) -> Result<(), String> {
     let contents = serde_json::to_string_pretty(names)
         .map_err(|e| format!("Failed to serialize session names: {}", e))?;
 
-    fs::write(&path, contents)
-        .map_err(|e| format!("Failed to write session names: {}", e))
+    fs::write(&path, contents).map_err(|e| format!("Failed to write session names: {}", e))
 }
 
 /// Get all session custom names
@@ -99,13 +98,18 @@ mod tests {
     #[test]
     fn test_session_names_serialization() {
         let mut names = SessionNames::default();
-        names.names.insert("session-123".to_string(), "My Custom Name".to_string());
+        names
+            .names
+            .insert("session-123".to_string(), "My Custom Name".to_string());
 
         let json = serde_json::to_string(&names).unwrap();
         assert!(json.contains("session-123"));
         assert!(json.contains("My Custom Name"));
 
         let parsed: SessionNames = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.names.get("session-123"), Some(&"My Custom Name".to_string()));
+        assert_eq!(
+            parsed.names.get("session-123"),
+            Some(&"My Custom Name".to_string())
+        );
     }
 }

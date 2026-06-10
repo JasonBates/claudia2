@@ -11,8 +11,7 @@ use tauri::State;
 
 use super::bot_config::get_raw_api_key;
 use super::secure_ipc::{
-    get_permission_request_path, get_permission_response_path, read_ipc_message,
-    write_ipc_message,
+    get_permission_request_path, get_permission_response_path, read_ipc_message, write_ipc_message,
 };
 use super::{cmd_debug_log, AppState};
 use crate::llm_reviewer::{LlmReviewer, ReviewRequest, ReviewResult};
@@ -222,8 +221,7 @@ pub async fn review_permission_request(
     );
 
     // Get API key from .env file
-    let api_key = get_raw_api_key(&state.launch_dir)
-        .ok_or("No API key configured for Bot mode")?;
+    let api_key = get_raw_api_key(&state.launch_dir).ok_or("No API key configured for Bot mode")?;
 
     // Get timeout from config
     let config = state.config.lock().await;

@@ -114,9 +114,7 @@ pub fn verify_file_security_from_handle(_file: &std::fs::File) -> Result<(), Str
 /// Atomically write a file with secure permissions (0600)
 /// Uses temp file + rename pattern to prevent partial reads
 pub fn secure_write(path: &PathBuf, content: &str) -> Result<(), String> {
-    let dir = path
-        .parent()
-        .ok_or("Invalid path: no parent directory")?;
+    let dir = path.parent().ok_or("Invalid path: no parent directory")?;
 
     // Create temp file in same directory (required for atomic rename)
     // Use timestamp + process ID for uniqueness
@@ -266,8 +264,12 @@ mod tests {
         let req = request_path.unwrap();
         let res = response_path.unwrap();
 
-        assert!(req.to_string_lossy().contains("permission-request-test-session-123"));
-        assert!(res.to_string_lossy().contains("permission-response-test-session-123"));
+        assert!(req
+            .to_string_lossy()
+            .contains("permission-request-test-session-123"));
+        assert!(res
+            .to_string_lossy()
+            .contains("permission-response-test-session-123"));
     }
 
     #[test]

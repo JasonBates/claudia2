@@ -1,5 +1,5 @@
 #!/bin/bash
-# run.sh - Build and launch Claude Terminal
+# run.sh - Build and launch Claudia2
 # Uses shared Cargo target for efficient multi-worktree builds
 
 set -e
@@ -17,8 +17,8 @@ export CARGO_TARGET_DIR="$HOME/.cargo/target/claude-terminal"
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-APP_BUNDLE="$CARGO_TARGET_DIR/release/bundle/macos/CT.app"
-INSTALL_PATH="/Applications/CT.app"
+APP_BUNDLE="$CARGO_TARGET_DIR/release/bundle/macos/Claudia2.app"
+INSTALL_PATH="/Applications/Claudia2.app"
 
 # Flags
 MODE="dev"
@@ -27,7 +27,7 @@ FORCE=false
 print_help() {
     echo "Usage: ./run.sh [OPTIONS]"
     echo ""
-    echo "Build and launch Claude Terminal."
+    echo "Build and launch Claudia2."
     echo "Uses shared Cargo target at $CARGO_TARGET_DIR"
     echo ""
     echo "Options:"
@@ -97,7 +97,7 @@ run_prod() {
     fi
 
     echo ""
-    echo -e "${BLUE}Launching CT.app...${NC}"
+    echo -e "${BLUE}Launching Claudia2.app...${NC}"
     open "$APP_BUNDLE"
 }
 
@@ -124,7 +124,7 @@ run_install() {
     echo -e "${GREEN}Installed to $INSTALL_PATH${NC}"
 
     echo ""
-    echo "Launch with: open /Applications/CT.app"
+    echo "Launch with: open /Applications/Claudia2.app"
 }
 
 # Parse arguments
@@ -166,7 +166,7 @@ done
 cd "$PROJECT_DIR"
 
 echo ""
-echo -e "${BLUE}=== Claude Terminal ===${NC}"
+echo -e "${BLUE}=== Claudia2 ===${NC}"
 echo ""
 
 case $MODE in

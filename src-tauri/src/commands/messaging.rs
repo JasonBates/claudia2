@@ -377,10 +377,10 @@ pub async fn send_message(
     let mut regular_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new(); // Track regular tool IDs for accurate completion tracking
     let mut pending_permission_count: usize = 0; // Count of permissions awaiting user response
     let mut subagent_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new(); // Track which tool IDs are subagents
-    // id -> tool name for in-flight tools, so a ToolResult can be matched to
-    // the permission request that gated it (PermissionRequest carries only the
-    // tool NAME). Without this, any unrelated parallel tool's result cleared
-    // the permission-pending state and silently changed the timeout class.
+                                                                                                     // id -> tool name for in-flight tools, so a ToolResult can be matched to
+                                                                                                     // the permission request that gated it (PermissionRequest carries only the
+                                                                                                     // tool NAME). Without this, any unrelated parallel tool's result cleared
+                                                                                                     // the permission-pending state and silently changed the timeout class.
     let mut tool_names: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     // Tool names with a permission dialog currently awaiting user response
@@ -461,7 +461,9 @@ pub async fn send_message(
                 }
                 if matches!(
                     event,
-                    ClaudeEvent::Ready { .. } | ClaudeEvent::Closed { .. } | ClaudeEvent::Interrupted
+                    ClaudeEvent::Ready { .. }
+                        | ClaudeEvent::Closed { .. }
+                        | ClaudeEvent::Interrupted
                 ) {
                     // Bridge restart/interrupt kills any in-flight autonomous
                     // turn - its AutoTurnEnd will never arrive, so clear the
@@ -501,11 +503,10 @@ pub async fn send_message(
                 if matches!(
                     event,
                     ClaudeEvent::ThinkingStart { .. } | ClaudeEvent::ThinkingDelta { .. }
-                ) {
-                    if !thinking_in_progress {
-                        thinking_in_progress = true;
-                        cmd_debug_log("THINKING", "Extended thinking started");
-                    }
+                ) && !thinking_in_progress
+                {
+                    thinking_in_progress = true;
+                    cmd_debug_log("THINKING", "Extended thinking started");
                 }
                 if matches!(
                     event,
@@ -923,7 +924,10 @@ pub async fn send_message(
                     // new message.
                     if matches!(&event, ClaudeEvent::Result { .. }) {
                         if cmd_debug_enabled() {
-                            cmd_debug_log("PUMP", &format!("Dropping Result (dup guard): {:?}", event));
+                            cmd_debug_log(
+                                "PUMP",
+                                &format!("Dropping Result (dup guard): {:?}", event),
+                            );
                         }
                     } else {
                         if cmd_debug_enabled() {
@@ -966,15 +970,17 @@ mod tests {
             parent_tool_use_id: None,
         }));
         assert!(is_background_drain_forward_event(&ClaudeEvent::Done));
-        assert!(is_background_drain_forward_event(&ClaudeEvent::BgTaskResult {
-            task_id: "task-1".to_string(),
-            tool_use_id: Some("tool-1".to_string()),
-            result: "final output".to_string(),
-            status: "completed".to_string(),
-            agent_type: "Explore".to_string(),
-            duration: 100,
-            tool_count: 1,
-        }));
+        assert!(is_background_drain_forward_event(
+            &ClaudeEvent::BgTaskResult {
+                task_id: "task-1".to_string(),
+                tool_use_id: Some("tool-1".to_string()),
+                result: "final output".to_string(),
+                status: "completed".to_string(),
+                agent_type: "Explore".to_string(),
+                duration: 100,
+                tool_count: 1,
+            }
+        ));
     }
 
     #[test]
@@ -990,7 +996,9 @@ mod tests {
             model: "claude".to_string(),
             tools: 1,
         }));
-        assert!(!is_background_drain_forward_event(&ClaudeEvent::Closed { code: 1 }));
+        assert!(!is_background_drain_forward_event(&ClaudeEvent::Closed {
+            code: 1
+        }));
         assert!(!is_background_drain_forward_event(&ClaudeEvent::Result {
             content: "duplicate fallback content".to_string(),
             cost: 0.0,
@@ -1043,8 +1051,7 @@ mod tests {
         assert_eq!(max_idle, MAX_IDLE_POST_TOOL);
 
         // Post-tool waiting should take priority over thinking and streaming
-        let (timeout, max_idle) =
-            calculate_timeouts(false, false, false, false, true, true, true);
+        let (timeout, max_idle) = calculate_timeouts(false, false, false, false, true, true, true);
         assert_eq!(timeout, TIMEOUT_TOOL_EXEC_MS);
         assert_eq!(max_idle, MAX_IDLE_POST_TOOL);
     }
@@ -1052,8 +1059,7 @@ mod tests {
     #[test]
     fn timeout_thinking_extends_streaming() {
         // Thinking mode should extend idle count but use streaming timeout
-        let (timeout, max_idle) =
-            calculate_timeouts(false, false, false, false, false, true, true);
+        let (timeout, max_idle) = calculate_timeouts(false, false, false, false, false, true, true);
         assert_eq!(timeout, TIMEOUT_STREAMING_MS);
         assert_eq!(max_idle, MAX_IDLE_THINKING);
     }
@@ -1122,6 +1128,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // intentional compile-time sanity checks
     fn timeout_values_are_reasonable() {
         // Sanity checks on the actual timeout values
         assert!(

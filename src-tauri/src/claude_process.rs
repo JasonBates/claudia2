@@ -57,10 +57,8 @@ fn get_secure_log_path() -> Option<PathBuf> {
     let log_dir = base_dir.join("com.jasonbates.claudia").join("logs");
 
     // Ensure directory exists with secure permissions
-    if !log_dir.exists() {
-        if std::fs::create_dir_all(&log_dir).is_err() {
-            return None;
-        }
+    if !log_dir.exists() && std::fs::create_dir_all(&log_dir).is_err() {
+        return None;
     }
 
     #[cfg(unix)]
@@ -117,7 +115,10 @@ impl ClaudeSender {
         // terminated, which is exactly the outcome we want from an interrupt.
         if let Err(e) = self.stdin.write_all(interrupt_msg.as_bytes()) {
             if e.kind() == std::io::ErrorKind::BrokenPipe {
-                rust_debug_log("SENDER", "Process already gone (broken pipe), interrupt successful");
+                rust_debug_log(
+                    "SENDER",
+                    "Process already gone (broken pipe), interrupt successful",
+                );
                 return Ok(());
             }
             rust_debug_log("SENDER", &format!("Write error: {}", e));
@@ -210,7 +211,10 @@ impl ProcessHandle {
                 }
             }
             match self.child.wait() {
-                Ok(status) => rust_debug_log("HANDLE", &format!("Child exited after SIGKILL: {:?}", status)),
+                Ok(status) => rust_debug_log(
+                    "HANDLE",
+                    &format!("Child exited after SIGKILL: {:?}", status),
+                ),
                 Err(e) => rust_debug_log("HANDLE", &format!("Wait error: {}", e)),
             }
         }
@@ -274,7 +278,10 @@ pub fn spawn_claude_process_with_resume(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        rust_debug_log("NODE", &format!("Using configured node binary: {}", configured_node));
+        rust_debug_log(
+            "NODE",
+            &format!("Using configured node binary: {}", configured_node),
+        );
         let configured_path = PathBuf::from(configured_node);
         let is_path_like = configured_node.contains('/') || configured_path.is_absolute();
 
@@ -306,8 +313,7 @@ pub fn spawn_claude_process_with_resume(
         .env("FORCE_COLOR", "0")
         .env("CLAUDIA_LAUNCH_DIR", &dir_str);
 
-    cmd
-        .env_remove("CLAUDECODE") // Strip parent Claude Code env so bridge doesn't refuse as "nested session"
+    cmd.env_remove("CLAUDECODE") // Strip parent Claude Code env so bridge doesn't refuse as "nested session"
         .env("CLAUDIA_SESSION_ID", app_session_id)
         .env(
             "CLAUDIA_DEBUG",
@@ -323,8 +329,7 @@ pub fn spawn_claude_process_with_resume(
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    let claude_model = override_model
-        .unwrap_or_else(|| config.claude_model.trim().to_string());
+    let claude_model = override_model.unwrap_or_else(|| config.claude_model.trim().to_string());
     if !claude_model.is_empty() {
         cmd.env("CLAUDIA_MODEL", &claude_model);
     }
@@ -583,7 +588,10 @@ fn read_output_bounded(stdout: ChildStdout, tx: mpsc::Sender<ClaudeEvent>) {
                 // the boundary would panic and kill the reader thread (tearing
                 // down the active session)
                 let preview: String = line.chars().take(100).collect();
-                rust_debug_log("JSON_ERROR", &format!("Parse error: {} - line: {}", e, preview));
+                rust_debug_log(
+                    "JSON_ERROR",
+                    &format!("Parse error: {} - line: {}", e, preview),
+                );
             }
         }
     }
@@ -1704,7 +1712,9 @@ mod tests {
         assert!(path.is_some());
 
         let log_path = path.unwrap();
-        assert!(log_path.to_string_lossy().contains("com.jasonbates.claudia"));
+        assert!(log_path
+            .to_string_lossy()
+            .contains("com.jasonbates.claudia"));
         assert!(log_path.to_string_lossy().contains("logs"));
         assert!(log_path.to_string_lossy().ends_with("claude-debug.log"));
     }

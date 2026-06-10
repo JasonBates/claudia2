@@ -1,31 +1,29 @@
 #!/bin/bash
-# Claudia CLI Installer
-# Installs the 'claudia' command to launch Claudia.app from any directory
+# Claudia2 CLI Installer
+# Installs the 'claudia2' command to launch Claudia2.app from any directory
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
-LAUNCHER="$SCRIPT_DIR/claudia"
+LAUNCHER="$SCRIPT_DIR/claudia2"
 
-echo "🔧 Installing Claudia CLI..."
+echo "🔧 Installing Claudia2 CLI..."
 
-# Check if Claudia.app exists
+# Check if Claudia2.app exists
 APP_PATH=""
-if [ -d "/Applications/Claudia.app" ]; then
-    APP_PATH="/Applications/Claudia.app"
-elif [ -d "$HOME/Applications/Claudia.app" ]; then
-    APP_PATH="$HOME/Applications/Claudia.app"
+if [ -d "/Applications/Claudia2.app" ]; then
+    APP_PATH="/Applications/Claudia2.app"
+elif [ -d "$HOME/Applications/Claudia2.app" ]; then
+    APP_PATH="$HOME/Applications/Claudia2.app"
 fi
 
 if [ -z "$APP_PATH" ]; then
     echo ""
-    echo "⚠️  Claudia.app not found in /Applications or ~/Applications"
+    echo "⚠️  Claudia2.app not found in /Applications or ~/Applications"
     echo ""
     echo "Build and install it first:"
-    echo "  npm install"
-    echo "  npm run tauri build"
-    echo "  cp -R src-tauri/target/release/bundle/macos/Claudia.app /Applications/"
+    echo "  ./scripts/run.sh --install"
     echo ""
     echo "Then run this script again."
     exit 1
@@ -40,11 +38,11 @@ if [ ! -d "$BIN_DIR" ]; then
 fi
 
 # Copy launcher script
-echo "Installing claudia to $BIN_DIR..."
-cp "$LAUNCHER" "$BIN_DIR/claudia"
-chmod +x "$BIN_DIR/claudia"
+echo "Installing claudia2 to $BIN_DIR..."
+cp "$LAUNCHER" "$BIN_DIR/claudia2"
+chmod +x "$BIN_DIR/claudia2"
 
-echo "✓ Installed $BIN_DIR/claudia"
+echo "✓ Installed $BIN_DIR/claudia2"
 
 # Check if ~/.local/bin is in PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
@@ -61,4 +59,4 @@ else
 fi
 
 echo ""
-echo "✅ Done! Run 'claudia' from any project directory to launch Claudia."
+echo "✅ Done! Run 'claudia2' from any project directory to launch Claudia2."

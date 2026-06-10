@@ -1,61 +1,57 @@
 #!/bin/bash
 #
-# Launch Claudia with debug logging enabled
+# Launch Claudia2 with debug logging enabled
 #
-# This enables detailed logging to:
-#   ~/Library/Application Support/com.jasonbates.claudia/logs/claude-debug.log
-#   /tmp/claude-commands-debug.log
+# Debug logs are written to the macOS per-user temp dir ($TMPDIR, not /tmp):
+#   $TMPDIR/claude-rust-debug.log
+#   $TMPDIR/claude-bridge-debug.log
+#   $TMPDIR/claude-commands-debug.log
 #
 # Usage: ./scripts/run-claudia-debug.sh
-#        claudia-debug  (if alias is set up)
 #
 
 set -euo pipefail
 
-# Find the Claudia app - prefer /Applications, fall back to dev build
-if [[ -x "/Applications/Claudia.app/Contents/MacOS/Claudia" ]]; then
-    APP_PATH="/Applications/Claudia.app/Contents/MacOS/Claudia"
-elif [[ -x "$HOME/Applications/Claudia.app/Contents/MacOS/Claudia" ]]; then
-    APP_PATH="$HOME/Applications/Claudia.app/Contents/MacOS/Claudia"
-else
-    # Dev build path
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    APP_PATH="$SCRIPT_DIR/../src-tauri/target/release/bundle/macos/Claudia.app/Contents/MacOS/Claudia"
-fi
+# Shared Cargo target used by scripts/run.sh builds
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cargo/target/claude-terminal}"
 
-if [[ ! -x "$APP_PATH" ]]; then
-    echo "Error: Claudia not found at expected locations"
+# Find the Claudia2 app - prefer /Applications, fall back to the shared-target build
+if [[ -x "/Applications/Claudia2.app/Contents/MacOS/claudia2" ]]; then
+    APP_PATH="/Applications/Claudia2.app/Contents/MacOS/claudia2"
+elif [[ -x "$HOME/Applications/Claudia2.app/Contents/MacOS/claudia2" ]]; then
+    APP_PATH="$HOME/Applications/Claudia2.app/Contents/MacOS/claudia2"
+elif [[ -x "$CARGO_TARGET_DIR/release/bundle/macos/Claudia2.app/Contents/MacOS/claudia2" ]]; then
+    APP_PATH="$CARGO_TARGET_DIR/release/bundle/macos/Claudia2.app/Contents/MacOS/claudia2"
+else
+    echo "Error: Claudia2 not found at expected locations"
+    echo "Build it first: ./scripts/run.sh --build (or --install)"
     exit 1
 fi
 
-LOG_DIR="$HOME/Library/Application Support/com.jasonbates.claudia/logs"
-
-# Create log directory if it doesn't exist
-mkdir -p "$LOG_DIR"
-
-echo "Starting Claudia with debug logging enabled..."
+echo "Starting Claudia2 with debug logging enabled..."
 echo "App: $APP_PATH"
 echo ""
 echo "Debug logs will be written to:"
-echo "  - $LOG_DIR/claude-debug.log"
-echo "  - /tmp/claude-commands-debug.log"
+echo "  - \$TMPDIR/claude-rust-debug.log"
+echo "  - \$TMPDIR/claude-bridge-debug.log"
+echo "  - \$TMPDIR/claude-commands-debug.log"
 echo ""
-echo "When the issue occurs, run: bugtime"
+echo "When the issue occurs, run: ./scripts/bugtime.sh"
 echo ""
 
-# Check if Claudia is already running
-if pgrep -f "Claudia.app" > /dev/null 2>&1; then
-    echo "Warning: Claudia is already running. Kill existing process? (y/N)"
+# Check if Claudia2 is already running
+if pgrep -f "Claudia2\.app" > /dev/null 2>&1; then
+    echo "Warning: Claudia2 is already running. Kill existing process? (y/N)"
     read -r response
     if [[ "$response" =~ ^[Yy]$ ]]; then
-        pkill -f "Claudia.app" || true
+        pkill -f "Claudia2\.app" || true
         sleep 1
     else
-        echo "Exiting. Stop existing Claudia first."
+        echo "Exiting. Stop existing Claudia2 first."
         exit 1
     fi
 fi
 
 # Launch with debug enabled - use env to explicitly pass the variable
-# Pass current directory so Claudia opens in the right location
+# Pass current directory so Claudia2 opens in the right location
 exec env CLAUDIA_DEBUG=1 "$APP_PATH" "$PWD"

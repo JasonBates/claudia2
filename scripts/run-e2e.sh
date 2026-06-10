@@ -28,7 +28,7 @@ cd "$PROJECT_DIR"
 # resulting in "asset not found: index.html" and a white screen.
 npx tauri build --debug --no-bundle
 
-BINARY="$PROJECT_DIR/src-tauri/target/debug/claudia"
+BINARY="$PROJECT_DIR/src-tauri/target/debug/claudia2"
 if [ ! -f "$BINARY" ]; then
     echo "ERROR: Debug binary not found at $BINARY"
     exit 1
