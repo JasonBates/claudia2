@@ -6,9 +6,19 @@ import type { Todo, SubagentInfo } from "../lib/types";
 import { formatJsonResult } from "../lib/json-formatter";
 
 // Global tick signal - all timers subscribe to this single source
-// Updates every second, so all timers flip simultaneously
-const [globalTick, setGlobalTick] = createSignal(Date.now());
-setInterval(() => setGlobalTick(Date.now()), 1000);
+// Updates every second, so all timers flip simultaneously.
+// HMR-safe singleton: a bare module-level setInterval stacks a new interval
+// (with its old closure kept alive) on every dev hot-reload of this module.
+const tickGlobals = globalThis as typeof globalThis & {
+  __claudiaTickSignal?: [() => number, (v: number) => void];
+  __claudiaTickInterval?: ReturnType<typeof setInterval>;
+};
+if (!tickGlobals.__claudiaTickSignal) {
+  const [tick, setTick] = createSignal(Date.now());
+  tickGlobals.__claudiaTickSignal = [tick, setTick];
+  tickGlobals.__claudiaTickInterval = setInterval(() => setTick(Date.now()), 1000);
+}
+const globalTick = tickGlobals.__claudiaTickSignal[0];
 
 // Check if result contains base64 image data from Read tool
 // Format: [{"type":"image","source":{"type":"base64","data":"..."}}]

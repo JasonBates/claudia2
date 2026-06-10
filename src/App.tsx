@@ -119,7 +119,6 @@ function App() {
 
   // Sidebar (session history)
   const sidebar = useSidebar({
-    owner,
     workingDir: () => session.workingDir(),
   });
 

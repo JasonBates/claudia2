@@ -383,7 +383,7 @@ export function normalizeClaudeEvent(event: ClaudeEvent): NormalizedEvent {
     case "tool_result":
       return {
         type: "tool_result",
-        toolUseId: event.tool_use_id,
+        toolUseId: event.tool_use_id ?? event.toolUseId,
         stdout: event.stdout || "",
         stderr: event.stderr || "",
         isError: event.is_error ?? event.isError ?? false,

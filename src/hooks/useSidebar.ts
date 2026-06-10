@@ -1,4 +1,4 @@
-import { createSignal, Accessor, Owner } from "solid-js";
+import { createSignal, Accessor } from "solid-js";
 import type { SessionEntry } from "../lib/types";
 import { listSessions, deleteSession, getSessionNames, setSessionName, deleteSessionName } from "../lib/tauri";
 
@@ -7,11 +7,6 @@ import { listSessions, deleteSession, getSessionNames, setSessionName, deleteSes
 // ============================================================================
 
 export interface UseSidebarOptions {
-  /**
-   * SolidJS owner for restoring reactive context in async callbacks.
-   */
-  owner: Owner | null;
-
   /**
    * Accessor for the current working directory.
    * Sessions are loaded for this directory.
@@ -39,12 +34,6 @@ export interface UseSidebarReturn {
 }
 
 // ============================================================================
-// Constants
-// ============================================================================
-
-const STORAGE_KEY = "claudia-sidebar-collapsed";
-
-// ============================================================================
 // Hook Implementation
 // ============================================================================
 
@@ -52,7 +41,7 @@ const STORAGE_KEY = "claudia-sidebar-collapsed";
  * Custom hook for managing the session sidebar.
  *
  * Handles:
- * - Sidebar visibility state (collapsed/expanded) with localStorage persistence
+ * - Sidebar visibility state (always starts collapsed; session-local only)
  * - Loading sessions from Claude Code's sessions-index.json
  * - Session deletion
  * - Custom session names (stored separately in Claudia's config)
@@ -61,30 +50,21 @@ const STORAGE_KEY = "claudia-sidebar-collapsed";
  * by modification date (newest first).
  */
 export function useSidebar(options: UseSidebarOptions): UseSidebarReturn {
-  // Always start collapsed - user can open manually
-  const loadCollapsedState = (): boolean => {
-    return true;
-  };
-
-  // State signals
-  const [collapsed, setCollapsed] = createSignal(loadCollapsedState());
+  // State signals. Collapsed always starts true - the sidebar is deliberately
+  // not persisted across launches (it used to write localStorage that was
+  // never read back; those dead writes have been removed).
+  const [collapsed, setCollapsed] = createSignal(true);
   const [sessions, setSessions] = createSignal<SessionEntry[]>([]);
   const [sessionNames, setSessionNames] = createSignal<Record<string, string>>({});
   const [isLoading, setIsLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
   /**
-   * Toggle sidebar visibility and persist to localStorage.
+   * Toggle sidebar visibility.
    */
   const toggleSidebar = (): void => {
     const newState = !collapsed();
     setCollapsed(newState);
-
-    try {
-      localStorage.setItem(STORAGE_KEY, String(newState));
-    } catch {
-      // localStorage might be unavailable
-    }
 
     // Load sessions when expanding if not already loaded
     if (!newState && sessions().length === 0 && !isLoading()) {
@@ -98,11 +78,6 @@ export function useSidebar(options: UseSidebarOptions): UseSidebarReturn {
   const openSidebar = (): void => {
     if (collapsed()) {
       setCollapsed(false);
-      try {
-        localStorage.setItem(STORAGE_KEY, "false");
-      } catch {
-        // localStorage might be unavailable
-      }
       // Load sessions if not already loaded
       if (sessions().length === 0 && !isLoading()) {
         loadSessions();
