@@ -33,6 +33,45 @@ use crate::config::Config;
 // rather than being re-exported here, because Tauri's generate_handler! macro
 // needs the __cmd__ functions to be accessible at the original module level.
 
+/// Take the Claude process components out of state and tear them down off the
+/// async runtime.
+///
+/// `ProcessHandle::drop` blocks for up to ~5s (SIGTERM grace period so the
+/// CLI's stop hooks, e.g. memory saves, can run). Doing that drop inside the
+/// lock scope - as the state-clearing blocks previously did with
+/// `*guard = None` - stalled every other command needing these locks
+/// (interrupts, permission responses, streaming) and pinned a tokio worker.
+///
+/// Drop order matters: receiver first, so a reader thread stuck in
+/// `blocking_send` is unblocked before `shutdown()` joins it.
+pub async fn teardown_process_state(
+    sender: &Arc<Mutex<Option<ClaudeSender>>>,
+    receiver: &Arc<Mutex<Option<ClaudeReceiver>>>,
+    process_handle: &Arc<Mutex<Option<ProcessHandle>>>,
+) {
+    let (old_sender, old_receiver, old_handle) = {
+        let mut sender_guard = sender.lock().await;
+        let mut receiver_guard = receiver.lock().await;
+        let mut handle_guard = process_handle.lock().await;
+        (
+            sender_guard.take(),
+            receiver_guard.take(),
+            handle_guard.take(),
+        )
+    };
+
+    if old_sender.is_some() || old_receiver.is_some() || old_handle.is_some() {
+        // Await completion (rather than detaching) so callers that spawn a
+        // replacement process don't overlap with the old one's teardown.
+        let _ = tokio::task::spawn_blocking(move || {
+            drop(old_receiver);
+            drop(old_sender);
+            drop(old_handle); // ProcessHandle::drop runs shutdown() here
+        })
+        .await;
+    }
+}
+
 /// Shared application state managed by Tauri
 pub struct AppState {
     /// Sender for writing to Claude (messages, interrupts, permission responses)
@@ -93,8 +132,9 @@ impl AppState {
     ) -> Self {
         // Track if a directory was explicitly provided (via CLI arg, env var, or --resume)
         // This is used to skip the project picker on reopen
-        let has_cli_directory =
-            cli_dir.is_some() || resume_session_id.is_some() || std::env::var("CLAUDIA_LAUNCH_DIR").ok().is_some();
+        let has_cli_directory = cli_dir.is_some()
+            || resume_session_id.is_some()
+            || std::env::var("CLAUDIA_LAUNCH_DIR").ok().is_some();
 
         // Use CLI directory if provided, then check CLAUDIA_LAUNCH_DIR env var,
         // otherwise default to home directory.

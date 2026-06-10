@@ -1,6 +1,6 @@
 import { createSignal, Accessor, Setter } from "solid-js";
 import { startSession as tauriStartSession, getLaunchDir, isSandboxEnabled } from "../lib/tauri";
-import type { SessionInfo } from "../lib/event-handlers";
+import type { SessionInfo } from "../lib/types";
 
 export interface UseSessionReturn {
   // Signals

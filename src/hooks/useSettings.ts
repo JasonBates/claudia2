@@ -148,8 +148,19 @@ export function useSettings(): UseSettingsReturn {
     applyFontSize(fontSize());
   });
 
-  // Persist changes to config
-  const persistSettings = async () => {
+  // Persist changes to config.
+  //
+  // Debounced + serialized: the sliders call this on every onInput step while
+  // dragging, and each call does an async read-modify-write of the config
+  // file. Unserialized, a slow earlier getConfig can complete after a later
+  // one and persist stale values (last-write-wins on the file). The debounce
+  // collapses drag bursts; the promise chain guarantees write ordering. The
+  // signal reads happen inside doPersist, so the final write always carries
+  // the latest values.
+  let persistTimer: ReturnType<typeof setTimeout> | undefined;
+  let persistQueue: Promise<void> = Promise.resolve();
+
+  const doPersist = async () => {
     try {
       const config = await getConfig();
       await saveConfig(
@@ -166,6 +177,14 @@ export function useSettings(): UseSettingsReturn {
     } catch (e) {
       console.error("Failed to save settings:", e);
     }
+  };
+
+  const persistSettings = () => {
+    if (persistTimer !== undefined) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      persistTimer = undefined;
+      persistQueue = persistQueue.then(doPersist);
+    }, 300);
   };
 
   const setContentMargin = (margin: number) => {

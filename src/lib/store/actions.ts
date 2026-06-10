@@ -16,7 +16,7 @@ import type {
   Question,
   SubagentInfo,
 } from "../types";
-import type { SessionInfo, PermissionRequest } from "../event-handlers";
+import type { SessionInfo, PermissionRequest } from "../types";
 import type { ReviewResult, UpdateInfo, UpdateStatus } from "./types";
 
 /**

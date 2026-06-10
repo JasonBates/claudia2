@@ -48,6 +48,7 @@ const CommandInput: Component<CommandInputProps> = (props) => {
   };
 
   let unlistenFocus: (() => void) | undefined;
+  let focusListenerDisposed = false;
 
   onMount(() => {
     focusInput();
@@ -67,11 +68,18 @@ const CommandInput: Component<CommandInputProps> = (props) => {
         });
       }
     }).then((unlisten) => {
-      unlistenFocus = unlisten;
+      // If cleanup already ran while the listener registration was in
+      // flight, unlisten immediately instead of leaking it.
+      if (focusListenerDisposed) {
+        unlisten();
+      } else {
+        unlistenFocus = unlisten;
+      }
     });
   });
 
   onCleanup(() => {
+    focusListenerDisposed = true;
     unlistenFocus?.();
     if (activateDebounceTimer) clearTimeout(activateDebounceTimer);
   });

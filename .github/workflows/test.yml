@@ -68,12 +68,20 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Check formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
       - name: Run Rust tests
         working-directory: src-tauri
         run: cargo test
 
-  lint:
-    name: Lint & Type Check
+  typecheck:
+    name: Type Check
     runs-on: ubuntu-latest
 
     steps:

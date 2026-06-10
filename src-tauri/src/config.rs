@@ -249,7 +249,7 @@ mod tests {
         let dir = config.working_dir();
 
         // Should return home directory or "."
-        assert!(dir.exists() || dir == PathBuf::from("."));
+        assert!(dir.exists() || dir == std::path::Path::new("."));
     }
 
     #[test]

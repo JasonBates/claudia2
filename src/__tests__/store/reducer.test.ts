@@ -10,7 +10,7 @@ import { describe, it, expect } from "vitest";
 import { conversationReducer } from "../../lib/store/reducer";
 import { createInitialState } from "../../lib/store/types";
 import type { Message, ToolUse, Todo, Question } from "../../lib/types";
-import type { PermissionRequest, SessionInfo } from "../../lib/event-handlers";
+import type { PermissionRequest, SessionInfo } from "../../lib/types";
 
 describe("conversationReducer", () => {
   // =========================================================================
@@ -412,78 +412,11 @@ describe("conversationReducer", () => {
       });
     });
 
-    it("UPDATE_TOOL should update tool by id in both tools and blocks", () => {
-      const tool: ToolUse = {
-        id: "tool-1",
-        name: "Read",
-        input: {},
-        isLoading: true,
-      };
-      const state = {
-        ...createInitialState(),
-        tools: { current: [tool] },
-        streaming: {
-          ...createInitialState().streaming,
-          blocks: [{ type: "tool_use" as const, tool }],
-        },
-      };
-
-      const newState = conversationReducer(state, {
-        type: "UPDATE_TOOL",
-        payload: {
-          id: "tool-1",
-          updates: { result: "file content", isLoading: false },
-        },
-      });
-
-      expect(newState.tools.current[0].result).toBe("file content");
-      expect(newState.tools.current[0].isLoading).toBe(false);
-
-      const toolBlock = newState.streaming.blocks[0] as {
-        type: "tool_use";
-        tool: ToolUse;
-      };
-      expect(toolBlock.tool.result).toBe("file content");
-      expect(toolBlock.tool.isLoading).toBe(false);
-    });
-
-    it("UPDATE_LAST_TOOL_INPUT should update last tool's input", () => {
-      const tool1: ToolUse = {
-        id: "tool-1",
-        name: "Read",
-        input: { file_path: "/old.txt" },
-        isLoading: true,
-      };
-      const tool2: ToolUse = {
-        id: "tool-2",
-        name: "Edit",
-        input: {},
-        isLoading: true,
-      };
-      const state = {
-        ...createInitialState(),
-        tools: { current: [tool1, tool2] },
-        streaming: {
-          ...createInitialState().streaming,
-          blocks: [
-            { type: "tool_use" as const, tool: tool1 },
-            { type: "tool_use" as const, tool: tool2 },
-          ],
-        },
-      };
-
-      const newState = conversationReducer(state, {
-        type: "UPDATE_LAST_TOOL_INPUT",
-        payload: { file_path: "/new.txt" },
-      });
-
-      expect(newState.tools.current[0].input).toEqual({
-        file_path: "/old.txt",
-      });
-      expect(newState.tools.current[1].input).toEqual({
-        file_path: "/new.txt",
-      });
-    });
+    // NOTE: UPDATE_TOOL / UPDATE_TOOL_SUBAGENT / UPDATE_LAST_TOOL_INPUT are
+    // handled by the store dispatch in context.tsx (path-based updates) and
+    // never reach the reducer - their behavior is covered by the
+    // event-dispatch tests. Reducer tests for them were removed along with
+    // the dead (and diverged) reducer implementations.
 
     it("SET_TOOLS should replace tools array", () => {
       const state = {
@@ -1096,42 +1029,6 @@ describe("conversationReducer", () => {
       expect(newState.messages).toEqual(state.messages);
     });
 
-    it("UPDATE_TOOL should handle non-existent tool ID gracefully", () => {
-      const tool: ToolUse = {
-        id: "tool-1",
-        name: "Read",
-        input: {},
-        isLoading: true,
-      };
-      const state = {
-        ...createInitialState(),
-        tools: { current: [tool] },
-        streaming: {
-          ...createInitialState().streaming,
-          blocks: [{ type: "tool_use" as const, tool }],
-        },
-      };
-
-      const newState = conversationReducer(state, {
-        type: "UPDATE_TOOL",
-        payload: { id: "non-existent", updates: { result: "test" } },
-      });
-
-      // Should not change anything
-      expect(newState.tools.current[0].result).toBeUndefined();
-    });
-
-    it("UPDATE_LAST_TOOL_INPUT should handle empty tools array", () => {
-      const state = createInitialState();
-
-      const newState = conversationReducer(state, {
-        type: "UPDATE_LAST_TOOL_INPUT",
-        payload: { file_path: "/test.txt" },
-      });
-
-      // Should not crash, state unchanged
-      expect(newState.tools.current).toEqual([]);
-    });
   });
 
   // =========================================================================

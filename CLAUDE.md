@@ -9,7 +9,7 @@
 - `./scripts/run.sh --dev` - Start dev server (auto-finds available port)
 - `./scripts/run.sh --build` - Build production app
 - `./scripts/run.sh --install` - Build and install to /Applications
-- `npm run test` - Run JS tests (Vitest)
+- `npm run test:run` - Run JS tests once (Vitest; plain `npm run test` is watch mode)
 - `npm run test:rust` - Run Rust tests
 - `npm run test:all` - Run all tests
 
@@ -26,7 +26,7 @@ CLAUDIA_DEBUG=1 ./scripts/run.sh --dev
 CLAUDIA_DEBUG=1 /Applications/Claudia2.app/Contents/MacOS/claudia2 "$PWD"
 ```
 
-Note: `./scripts/run-claudia-debug.sh` is **broken for claudia2** — it hardcodes `/Applications/Claudia.app/Contents/MacOS/Claudia` (the old, pre-rewrite app). Use the commands above instead.
+`./scripts/run-claudia-debug.sh` launches the installed (or shared-target) Claudia2 build with debug logging and is equivalent to the installed-app command above.
 
 **Log locations (when debug enabled):**
 The bridge uses Node's `os.tmpdir()`, which on macOS is `$TMPDIR` (`/var/folders/.../T/`), **not** `/tmp`. Find them via:

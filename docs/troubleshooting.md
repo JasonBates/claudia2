@@ -4,13 +4,14 @@ Common issues and their solutions, plus debugging techniques.
 
 ## Log Files
 
-Debug logs are written to temp files:
+Debug logs are written to temp files (under `$TMPDIR` on macOS, not `/tmp` —
+find them with `ls "$TMPDIR"/claude-*-debug.log`):
 
 | Log File | Contents |
 |----------|----------|
-| `/tmp/claude-bridge-debug.log` | Bridge I/O, event emission |
-| `/tmp/claude-permission-mcp.log` | Permission server activity |
-| `/tmp/claude-commands-debug.log` | Rust command execution, timeouts |
+| `$TMPDIR/claude-bridge-debug.log` | Bridge I/O, event emission |
+| `$TMPDIR/claude-rust-debug.log` | Rust/Tauri process logs |
+| `$TMPDIR/claude-commands-debug.log` | Rust command execution, timeouts |
 
 ### Frontend Console
 

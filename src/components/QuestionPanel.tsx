@@ -95,16 +95,19 @@ const QuestionPanel: Component<QuestionPanelProps> = (props) => {
       const optionsLen = question.options.length;
 
       if (focused < optionsLen) {
-        // Select a regular option
+        // Select a regular option. For a single non-multiSelect question,
+        // selectOption already calls props.onAnswer itself - calling
+        // submitAllAnswers afterwards would fire onAnswer a SECOND time,
+        // and the second call (panel already cleared) fell through to
+        // handleSubmit, sending the answer as a spurious chat prompt.
+        const autoSubmits = props.questions.length === 1 && !question.multiSelect;
         selectOption(question, question.options[focused]);
+        if (!autoSubmits && allQuestionsAnswered()) {
+          submitAllAnswers();
+        }
       } else {
-        // "Other" is focused
+        // "Other" is focused - opens the custom input, never submits
         selectOther(question);
-      }
-
-      // If all questions answered and we're on the last one, submit
-      if (allQuestionsAnswered()) {
-        submitAllAnswers();
       }
     }
   };

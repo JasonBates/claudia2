@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::cmd_debug_log;
 use crate::warmup;
@@ -155,11 +155,18 @@ fn list_sessions_sync(working_dir: &str) -> Result<Vec<SessionEntry>, String> {
     );
 
     // Sort by modification time descending (newest first)
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|b| std::cmp::Reverse(b.1));
+
+    // Minimum age before a warmup-only session file may be deleted. A freshly
+    // started session looks "warmup-only" until the user submits their first
+    // prompt - deleting it would pull the live JSONL out from under the CLI
+    // (history silently lost, resume broken). It also guards against racing
+    // another Claudia window / CLI instance starting up in the same project.
+    const WARMUP_CLEANUP_MIN_AGE: Duration = Duration::from_secs(60 * 60);
 
     // Only parse the MAX_SESSIONS most recent files
     let mut sessions: Vec<SessionEntry> = Vec::new();
-    for (path, _) in files.into_iter().take(MAX_SESSIONS) {
+    for (path, mtime) in files.into_iter().take(MAX_SESSIONS) {
         match parse_session_file(&path, working_dir) {
             Ok(session) => {
                 // Filter out sidechains
@@ -167,14 +174,29 @@ fn list_sessions_sync(working_dir: &str) -> Result<Vec<SessionEntry>, String> {
                     continue;
                 }
 
-                // Delete warmup-only sessions (have messages but no meaningful first prompt)
-                // These are sessions with only isMeta caveat + /status command
+                // Hide warmup-only sessions (have messages but no meaningful first
+                // prompt - only isMeta caveat + /status command). Delete them only
+                // once they're old enough to be definitely abandoned.
                 if session.first_prompt.is_empty() {
-                    cmd_debug_log(
-                        "SESSION_LIST",
-                        &format!("Deleting warmup-only session: {}", session.session_id),
-                    );
-                    warmup::cleanup_warmup_session(&path, &session.session_id, &project_dir);
+                    let old_enough = SystemTime::now()
+                        .duration_since(mtime)
+                        .map(|age| age > WARMUP_CLEANUP_MIN_AGE)
+                        .unwrap_or(false);
+                    if old_enough {
+                        cmd_debug_log(
+                            "SESSION_LIST",
+                            &format!("Deleting warmup-only session: {}", session.session_id),
+                        );
+                        warmup::cleanup_warmup_session(&path, &session.session_id, &project_dir);
+                    } else {
+                        cmd_debug_log(
+                            "SESSION_LIST",
+                            &format!(
+                                "Hiding recent warmup-only session (too new to delete): {}",
+                                session.session_id
+                            ),
+                        );
+                    }
                     continue;
                 }
 

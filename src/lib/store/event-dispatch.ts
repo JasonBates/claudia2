@@ -41,7 +41,7 @@ import type {
 import type { Action } from "./actions";
 import type { StreamingRefs } from "./types";
 import type { ToolUse, SubagentInfo, Question } from "../types";
-import type { PermissionRequest, SessionInfo } from "../event-handlers";
+import type { PermissionRequest, SessionInfo } from "../types";
 import { parseToolInput } from "../json-streamer";
 
 /**
@@ -609,7 +609,9 @@ export function handlePermissionRequest(
     // If planning was already exited (e.g., user cancelled), auto-deny the late permission
     if (!ctx.isPlanning()) {
       console.log("[PERMISSION] ExitPlanMode arrived after planning exited, auto-denying, requestId:", requestId);
-      ctx.sendPermissionResponse(requestId, false, false);
+      ctx.sendPermissionResponse(requestId, false, false).catch((err) => {
+        console.error("[PERMISSION] Late ExitPlanMode auto-deny failed:", err);
+      });
       return;
     }
     console.log("[PERMISSION] ExitPlanMode - routing to plan approval, requestId:", requestId);

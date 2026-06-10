@@ -44,12 +44,12 @@ print_help() {
 }
 
 kill_processes() {
-    echo -e "${BLUE}Checking for running CT processes...${NC}"
+    echo -e "${BLUE}Checking for running Claudia2 processes...${NC}"
 
-    # Kill any running CT.app instances
-    if pgrep -f "CT.app" > /dev/null 2>&1; then
-        echo -e "${YELLOW}  Killing CT.app processes...${NC}"
-        pkill -f "CT.app" || true
+    # Kill any running Claudia2.app instances
+    if pgrep -f "Claudia2\\.app" > /dev/null 2>&1; then
+        echo -e "${YELLOW}  Killing Claudia2.app processes...${NC}"
+        pkill -f "Claudia2\\.app" || true
     fi
 
     # Kill any running tauri dev processes
@@ -58,10 +58,11 @@ kill_processes() {
         pkill -f "tauri dev" || true
     fi
 
-    # Kill vite dev server
-    if pgrep -f "vite" > /dev/null 2>&1; then
-        echo -e "${YELLOW}  Killing vite processes...${NC}"
-        pkill -f "vite" || true
+    # Kill vite dev server (scoped to this project's path so other
+    # projects' vite processes are left alone)
+    if pgrep -f "vite.*$PROJECT_DIR" > /dev/null 2>&1; then
+        echo -e "${YELLOW}  Killing this project's vite processes...${NC}"
+        pkill -f "vite.*$PROJECT_DIR" || true
     fi
 
     echo -e "${GREEN}  Processes cleaned${NC}"
@@ -115,18 +116,18 @@ clean_rust_artifacts() {
     echo -e "${BLUE}Cleaning Rust artifacts from shared target...${NC}"
 
     # Only clean this project's artifacts, not dependencies
-    local build_dir="$CARGO_TARGET/release/build/claude-terminal-*"
-    local deps_dir="$CARGO_TARGET/release/deps/claude_terminal*"
-    local incremental="$CARGO_TARGET/release/incremental/claude_terminal*"
+    local build_dir="$CARGO_TARGET/release/build/claudia2-*"
+    local deps_dir="$CARGO_TARGET/release/deps/claudia2*"
+    local incremental="$CARGO_TARGET/release/incremental/claudia2*"
 
     rm -rf $build_dir 2>/dev/null || true
     rm -rf $deps_dir 2>/dev/null || true
     rm -rf $incremental 2>/dev/null || true
 
     # Clean debug artifacts too
-    build_dir="$CARGO_TARGET/debug/build/claude-terminal-*"
-    deps_dir="$CARGO_TARGET/debug/deps/claude_terminal*"
-    incremental="$CARGO_TARGET/debug/incremental/claude_terminal*"
+    build_dir="$CARGO_TARGET/debug/build/claudia2-*"
+    deps_dir="$CARGO_TARGET/debug/deps/claudia2*"
+    incremental="$CARGO_TARGET/debug/incremental/claudia2*"
 
     rm -rf $build_dir 2>/dev/null || true
     rm -rf $deps_dir 2>/dev/null || true

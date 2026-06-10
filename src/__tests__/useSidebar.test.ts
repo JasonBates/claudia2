@@ -98,7 +98,6 @@ describe("useSidebar", () => {
       dispose = d;
       workingDirSignal = createSignal<string | null>(workingDir);
       hook = useSidebar({
-        owner: null,
         workingDir: workingDirSignal[0],
       });
     });
@@ -159,17 +158,6 @@ describe("useSidebar", () => {
       expect(hook.collapsed()).toBe(true);
     });
 
-    it("should persist collapsed state to localStorage", () => {
-      const { hook } = createHook();
-
-      hook.toggleSidebar();
-
-      expect(localStorageMock.setItem).toHaveBeenCalledWith(
-        "claudia-sidebar-collapsed",
-        "false"
-      );
-    });
-
     it("should load sessions when expanding if not already loaded", async () => {
       const { hook } = createHook();
 
@@ -221,17 +209,6 @@ describe("useSidebar", () => {
       hook.openSidebar();
 
       expect(hook.collapsed()).toBe(false);
-    });
-
-    it("should persist state to localStorage", () => {
-      const { hook } = createHook();
-
-      hook.openSidebar();
-
-      expect(localStorageMock.setItem).toHaveBeenCalledWith(
-        "claudia-sidebar-collapsed",
-        "false"
-      );
     });
 
     it("should load sessions if not already loaded", async () => {

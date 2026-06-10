@@ -269,3 +269,32 @@ export interface SessionEntry {
   projectPath: string;
   isSidechain: boolean;
 }
+
+/**
+ * Session metadata captured from Ready/context events.
+ * (Moved from event-handlers.ts when its dead handler set was deleted.)
+ */
+export interface SessionInfo {
+  sessionId?: string;
+  model?: string;
+  totalContext?: number;
+  outputTokens?: number;
+  baseContext?: number;
+}
+
+/**
+ * Permission request from Claude.
+ * (Moved from event-handlers.ts when its dead handler set was deleted.)
+ */
+export interface PermissionRequest {
+  requestId: string;
+  toolName: string;
+  toolInput?: unknown;
+  description: string;
+  /**
+   * Source of the permission request:
+   * - "control": from control_request via stream (use sendPermissionResponse)
+   * - "hook": from file-based hook polling (use respondToPermission)
+   */
+  source: "control" | "hook";
+}

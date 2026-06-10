@@ -1,12 +1,9 @@
 use crate::llm_reviewer::validate_api_key;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::PathBuf;
 use tauri::State;
 
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-
+use super::secure_ipc::secure_write;
 use super::AppState;
 
 /// Get the path to the .env file for the current working directory
@@ -18,56 +15,19 @@ fn get_env_path(working_dir: &str) -> PathBuf {
 /// Returns a masked version for display (e.g., "sk-ant-***...***")
 #[tauri::command]
 pub fn get_bot_api_key(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let env_path = get_env_path(&state.launch_dir);
-    if !env_path.exists() {
-        return Ok(None);
-    }
-
-    let contents = fs::read_to_string(&env_path)
-        .map_err(|e| format!("Failed to read .env file: {}", e))?;
-
-    // Parse .env file looking for ANTHROPIC_API_KEY
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.starts_with("ANTHROPIC_API_KEY=") {
-            let key = line.strip_prefix("ANTHROPIC_API_KEY=").unwrap_or("");
-            // Remove quotes if present
-            let key = key.trim_matches('"').trim_matches('\'');
-            if key.is_empty() {
-                return Ok(None);
-            }
-            // Return masked version
-            return Ok(Some(mask_api_key(key)));
-        }
-    }
-
-    Ok(None)
+    Ok(get_raw_api_key(&state.launch_dir).map(|key| mask_api_key(&key)))
 }
 
 /// Check if a Bot API key is configured (without returning the actual key)
 #[tauri::command]
 pub fn has_bot_api_key(state: State<'_, AppState>) -> Result<bool, String> {
-    let env_path = get_env_path(&state.launch_dir);
-    if !env_path.exists() {
-        return Ok(false);
-    }
-
-    let contents = fs::read_to_string(&env_path)
-        .map_err(|e| format!("Failed to read .env file: {}", e))?;
-
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.starts_with("ANTHROPIC_API_KEY=") {
-            let key = line.strip_prefix("ANTHROPIC_API_KEY=").unwrap_or("");
-            let key = key.trim_matches('"').trim_matches('\'');
-            return Ok(!key.is_empty());
-        }
-    }
-
-    Ok(false)
+    Ok(get_raw_api_key(&state.launch_dir).is_some())
 }
 
 /// Get the raw API key (for internal use only, not exposed to frontend)
+///
+/// Single source of truth for .env parsing - the masked/boolean commands
+/// above delegate here.
 pub fn get_raw_api_key(working_dir: &str) -> Option<String> {
     let env_path = get_env_path(working_dir);
     if !env_path.exists() {
@@ -92,10 +52,7 @@ pub fn get_raw_api_key(working_dir: &str) -> Option<String> {
 
 /// Set the Bot API key in .env file
 #[tauri::command]
-pub async fn set_bot_api_key(
-    api_key: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn set_bot_api_key(api_key: String, state: State<'_, AppState>) -> Result<(), String> {
     let env_path = get_env_path(&state.launch_dir);
 
     // Read existing .env file or start fresh
@@ -124,54 +81,30 @@ pub async fn set_bot_api_key(
         lines.push(key_line);
     }
 
-    // Write back to .env file with restrictive permissions (0o600)
-    // This ensures the file is only readable/writable by the owner
-    let contents = lines.join("\n");
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600) // Owner read/write only (for new files)
-            .open(&env_path)
-            .map_err(|e| format!("Failed to create .env file: {}", e))?;
-        file.write_all(contents.as_bytes())
-            .map_err(|e| format!("Failed to write .env file: {}", e))?;
-
-        // Explicitly set permissions for existing files (mode() only affects new files)
-        fs::set_permissions(&env_path, fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("Failed to set .env file permissions: {}", e))?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        fs::write(&env_path, contents)
-            .map_err(|e| format!("Failed to write .env file: {}", e))?;
-    }
-
-    Ok(())
+    // Atomic write (temp file + rename, 0o600) via secure_write: a crash
+    // mid-write must not corrupt a file that may hold other secrets.
+    let contents = lines.join("\n") + "\n";
+    secure_write(&env_path, &contents)
 }
 
 /// Validate the Bot API key by making a test API call
 #[tauri::command]
 pub async fn validate_bot_api_key(state: State<'_, AppState>) -> Result<bool, String> {
-    let api_key = get_raw_api_key(&state.launch_dir)
-        .ok_or("No API key configured")?;
+    let api_key = get_raw_api_key(&state.launch_dir).ok_or("No API key configured")?;
 
     validate_api_key(&api_key).await
 }
 
-/// Mask an API key for display
+/// Mask an API key for display.
+/// Char-boundary safe: byte slicing would panic if a pasted key contained a
+/// multibyte character (smart quote, em-dash) straddling the offsets.
 fn mask_api_key(key: &str) -> String {
-    if key.len() <= 12 {
-        return "*".repeat(key.len());
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 12 {
+        return "*".repeat(chars.len());
     }
-    let prefix = &key[..8];
-    let suffix = &key[key.len() - 4..];
+    let prefix: String = chars[..8].iter().collect();
+    let suffix: String = chars[chars.len() - 4..].iter().collect();
     format!("{}...{}", prefix, suffix)
 }
 
@@ -189,5 +122,14 @@ mod tests {
     fn test_mask_api_key_short() {
         let masked = mask_api_key("short");
         assert_eq!(masked, "*****");
+    }
+
+    #[test]
+    fn test_mask_api_key_multibyte() {
+        // Must not panic on multibyte chars near the slice offsets
+        let masked = mask_api_key("sk-ant-“pasted-with-smart-quotes”");
+        assert!(masked.contains("..."));
+        let masked = mask_api_key("é€😀-short");
+        assert_eq!(masked, "*********"); // 9 chars -> 9 stars
     }
 }

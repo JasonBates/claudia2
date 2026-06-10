@@ -213,9 +213,25 @@ pub async fn send_message(
             cmd_debug_log("DRAIN", "Draining stale events...");
             let mut drained = 0;
             let mut forwarded = 0;
-            while let Ok(Some(event)) =
-                timeout(Duration::from_millis(10), receiver.recv_event()).await
-            {
+            loop {
+                let event = match timeout(Duration::from_millis(10), receiver.recv_event()).await {
+                    // Timeout: no more stale events buffered
+                    Err(_) => break,
+                    // Channel closed: the reader thread exited, i.e. the bridge
+                    // died WITHOUT emitting its `closed` JSON line (SIGKILL,
+                    // node crash, OOM). Without this arm, needs_restart stayed
+                    // false and every subsequent send_message failed with
+                    // "Write error: Broken pipe" forever.
+                    Ok(None) => {
+                        cmd_debug_log(
+                            "DRAIN",
+                            "Event channel closed - bridge died silently, will restart",
+                        );
+                        needs_restart = true;
+                        break;
+                    }
+                    Ok(Some(event)) => event,
+                };
                 // Keep the autonomous-turn flag in sync even when markers land
                 // in the drain (e.g. an auto turn started while idle)
                 if matches!(&event, ClaudeEvent::AutoTurnStart) {
@@ -276,15 +292,8 @@ pub async fn send_message(
     if needs_restart {
         cmd_debug_log("RESTART", "Restarting session before sending message");
 
-        // Clear all state atomically
-        {
-            let mut sender_guard = sender_arc.lock().await;
-            let mut receiver_guard = receiver_arc.lock().await;
-            let mut handle_guard = handle_arc.lock().await;
-            *sender_guard = None;
-            *receiver_guard = None;
-            *handle_guard = None;
-        }
+        // Tear down off the locks (ProcessHandle::drop blocks up to ~5s)
+        super::teardown_process_state(&sender_arc, &receiver_arc, &handle_arc).await;
 
         let working_dir = std::path::PathBuf::from(&state.launch_dir);
         let app_session_id = state.session_id.clone();
@@ -368,6 +377,14 @@ pub async fn send_message(
     let mut regular_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new(); // Track regular tool IDs for accurate completion tracking
     let mut pending_permission_count: usize = 0; // Count of permissions awaiting user response
     let mut subagent_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new(); // Track which tool IDs are subagents
+                                                                                                     // id -> tool name for in-flight tools, so a ToolResult can be matched to
+                                                                                                     // the permission request that gated it (PermissionRequest carries only the
+                                                                                                     // tool NAME). Without this, any unrelated parallel tool's result cleared
+                                                                                                     // the permission-pending state and silently changed the timeout class.
+    let mut tool_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    // Tool names with a permission dialog currently awaiting user response
+    let mut pending_permission_tools: Vec<String> = Vec::new();
     let mut compacting = false; // Track if compaction is in progress (can take 60+ seconds)
     let mut thinking_in_progress = false; // Track if extended thinking is active (needs longer timeout)
     let mut post_tool_waiting = false; // Track post-tool API processing phase (45s window)
@@ -444,7 +461,9 @@ pub async fn send_message(
                 }
                 if matches!(
                     event,
-                    ClaudeEvent::Ready { .. } | ClaudeEvent::Closed { .. } | ClaudeEvent::Interrupted
+                    ClaudeEvent::Ready { .. }
+                        | ClaudeEvent::Closed { .. }
+                        | ClaudeEvent::Interrupted
                 ) {
                     // Bridge restart/interrupt kills any in-flight autonomous
                     // turn - its AutoTurnEnd will never arrive, so clear the
@@ -484,11 +503,10 @@ pub async fn send_message(
                 if matches!(
                     event,
                     ClaudeEvent::ThinkingStart { .. } | ClaudeEvent::ThinkingDelta { .. }
-                ) {
-                    if !thinking_in_progress {
-                        thinking_in_progress = true;
-                        cmd_debug_log("THINKING", "Extended thinking started");
-                    }
+                ) && !thinking_in_progress
+                {
+                    thinking_in_progress = true;
+                    cmd_debug_log("THINKING", "Extended thinking started");
                 }
                 if matches!(
                     event,
@@ -516,6 +534,7 @@ pub async fn send_message(
                     ref id, ref name, ..
                 } = event
                 {
+                    tool_names.insert(id.clone(), name.clone());
                     if name == "Task" {
                         if subagent_tool_ids.insert(id.clone()) {
                             pending_subagent_count += 1;
@@ -560,16 +579,42 @@ pub async fn send_message(
                             tool_use_id, stdout_len
                         ),
                     );
-                    // Tool result means permission was granted (if any pending)
+                    // A tool result only proves a permission was resolved if it
+                    // belongs to the tool that was gated. Match by tool name
+                    // (PermissionRequest carries no tool_use_id). Unknown-id
+                    // results fall back to the old clear-anything behavior so a
+                    // mismatch can't leave permission_pending stuck for the turn.
                     if pending_permission_count > 0 {
-                        pending_permission_count -= 1;
-                        cmd_debug_log(
-                            "PERMISSION",
-                            &format!(
-                                "Permission resolved - pending: {} permissions",
-                                pending_permission_count
-                            ),
-                        );
+                        let resolved = match tool_use_id {
+                            Some(ref id) => match tool_names.get(id) {
+                                Some(name) => {
+                                    if let Some(pos) =
+                                        pending_permission_tools.iter().position(|n| n == name)
+                                    {
+                                        pending_permission_tools.remove(pos);
+                                        true
+                                    } else {
+                                        false // unrelated parallel tool
+                                    }
+                                }
+                                None => {
+                                    // Unknown tool id - can't attribute; be conservative
+                                    pending_permission_tools.pop();
+                                    true
+                                }
+                            },
+                            None => false, // duplicates carry no id and prove nothing
+                        };
+                        if resolved {
+                            pending_permission_count -= 1;
+                            cmd_debug_log(
+                                "PERMISSION",
+                                &format!(
+                                    "Permission resolved - pending: {} permissions",
+                                    pending_permission_count
+                                ),
+                            );
+                        }
                     }
                     // Only decrement for results with tool_use_id (not duplicates)
                     if let Some(ref id) = tool_use_id {
@@ -640,8 +685,15 @@ pub async fn send_message(
                 // Check if this is a "done" signal (Done or Interrupted both end the response)
                 let is_done = matches!(event, ClaudeEvent::Done | ClaudeEvent::Interrupted);
 
-                // Check if this is a permission request - we need to release the lock after sending
-                let is_permission_request = matches!(event, ClaudeEvent::PermissionRequest { .. });
+                // Check if this is a permission request - we need to release the lock after sending.
+                // Capture the gated tool's name before the event is moved into the channel.
+                let permission_tool_name =
+                    if let ClaudeEvent::PermissionRequest { ref tool_name, .. } = event {
+                        Some(tool_name.clone())
+                    } else {
+                        None
+                    };
+                let is_permission_request = permission_tool_name.is_some();
 
                 match channel.send(event) {
                     Ok(_) => {
@@ -662,6 +714,9 @@ pub async fn send_message(
                 // for this streaming loop to release the receiver lock.
                 if is_permission_request {
                     pending_permission_count += 1;
+                    if let Some(name) = permission_tool_name {
+                        pending_permission_tools.push(name);
+                    }
                     cmd_debug_log(
                         "PERMISSION",
                         &format!(
@@ -708,6 +763,22 @@ pub async fn send_message(
                                         &format!("#{} {:?}", trailing_count, trailing_event),
                                     );
                                 }
+                                // Keep the autonomous-turn flag in sync (same as
+                                // the drain/pump paths). Forwarding these markers
+                                // unhandled would leave auto_turn_active stale and
+                                // misattribute the auto turn's deltas to the next
+                                // user prompt.
+                                match &trailing_event {
+                                    ClaudeEvent::AutoTurnStart => {
+                                        state.auto_turn_active.store(true, Ordering::SeqCst);
+                                        continue;
+                                    }
+                                    ClaudeEvent::AutoTurnEnd => {
+                                        state.auto_turn_active.store(false, Ordering::SeqCst);
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
                                 let _ = channel.send(trailing_event);
                             }
                             _ => break,
@@ -732,14 +803,7 @@ pub async fn send_message(
                 );
                 bridge_died = true;
                 drop(receiver_guard); // Release lock before acquiring others
-                {
-                    let mut sender_guard = sender_arc.lock().await;
-                    let mut rg = receiver_arc.lock().await;
-                    let mut handle_guard = handle_arc.lock().await;
-                    *sender_guard = None;
-                    *rg = None;
-                    *handle_guard = None;
-                }
+                super::teardown_process_state(&sender_arc, &receiver_arc, &handle_arc).await;
                 channel.send(ClaudeEvent::Done).map_err(|e| e.to_string())?;
                 break;
             }
@@ -860,7 +924,10 @@ pub async fn send_message(
                     // new message.
                     if matches!(&event, ClaudeEvent::Result { .. }) {
                         if cmd_debug_enabled() {
-                            cmd_debug_log("PUMP", &format!("Dropping Result (dup guard): {:?}", event));
+                            cmd_debug_log(
+                                "PUMP",
+                                &format!("Dropping Result (dup guard): {:?}", event),
+                            );
                         }
                     } else {
                         if cmd_debug_enabled() {
@@ -903,15 +970,17 @@ mod tests {
             parent_tool_use_id: None,
         }));
         assert!(is_background_drain_forward_event(&ClaudeEvent::Done));
-        assert!(is_background_drain_forward_event(&ClaudeEvent::BgTaskResult {
-            task_id: "task-1".to_string(),
-            tool_use_id: Some("tool-1".to_string()),
-            result: "final output".to_string(),
-            status: "completed".to_string(),
-            agent_type: "Explore".to_string(),
-            duration: 100,
-            tool_count: 1,
-        }));
+        assert!(is_background_drain_forward_event(
+            &ClaudeEvent::BgTaskResult {
+                task_id: "task-1".to_string(),
+                tool_use_id: Some("tool-1".to_string()),
+                result: "final output".to_string(),
+                status: "completed".to_string(),
+                agent_type: "Explore".to_string(),
+                duration: 100,
+                tool_count: 1,
+            }
+        ));
     }
 
     #[test]
@@ -927,7 +996,9 @@ mod tests {
             model: "claude".to_string(),
             tools: 1,
         }));
-        assert!(!is_background_drain_forward_event(&ClaudeEvent::Closed { code: 1 }));
+        assert!(!is_background_drain_forward_event(&ClaudeEvent::Closed {
+            code: 1
+        }));
         assert!(!is_background_drain_forward_event(&ClaudeEvent::Result {
             content: "duplicate fallback content".to_string(),
             cost: 0.0,
@@ -980,8 +1051,7 @@ mod tests {
         assert_eq!(max_idle, MAX_IDLE_POST_TOOL);
 
         // Post-tool waiting should take priority over thinking and streaming
-        let (timeout, max_idle) =
-            calculate_timeouts(false, false, false, false, true, true, true);
+        let (timeout, max_idle) = calculate_timeouts(false, false, false, false, true, true, true);
         assert_eq!(timeout, TIMEOUT_TOOL_EXEC_MS);
         assert_eq!(max_idle, MAX_IDLE_POST_TOOL);
     }
@@ -989,8 +1059,7 @@ mod tests {
     #[test]
     fn timeout_thinking_extends_streaming() {
         // Thinking mode should extend idle count but use streaming timeout
-        let (timeout, max_idle) =
-            calculate_timeouts(false, false, false, false, false, true, true);
+        let (timeout, max_idle) = calculate_timeouts(false, false, false, false, false, true, true);
         assert_eq!(timeout, TIMEOUT_STREAMING_MS);
         assert_eq!(max_idle, MAX_IDLE_THINKING);
     }
@@ -1059,6 +1128,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // intentional compile-time sanity checks
     fn timeout_values_are_reasonable() {
         // Sanity checks on the actual timeout values
         assert!(

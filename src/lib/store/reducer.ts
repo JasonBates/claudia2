@@ -8,7 +8,7 @@
 
 import type { ConversationState } from "./types";
 import type { Action } from "./actions";
-import type { ToolUse, ContentBlock, Message, SubagentInfo } from "../types";
+import type { Message } from "../types";
 
 /**
  * Pure reducer function - given current state and action, returns new state.
@@ -246,126 +246,12 @@ export function conversationReducer(
       };
     }
 
-    case "UPDATE_TOOL": {
-      const { id, updates } = action.payload;
-
-      // If result is being set, also record completedAt timestamp
-      const finalUpdates = updates.result !== undefined
-        ? { ...updates, completedAt: Date.now() }
-        : updates;
-
-      // Update in tools.current
-      const updatedTools = state.tools.current.map((tool) =>
-        tool.id === id ? { ...tool, ...finalUpdates } : tool
-      );
-
-      // Update in streaming blocks
-      const updatedBlocks = state.streaming.blocks.map((block) => {
-        if (block.type === "tool_use" && (block as { type: "tool_use"; tool: ToolUse }).tool.id === id) {
-          const toolBlock = block as { type: "tool_use"; tool: ToolUse };
-          return {
-            type: "tool_use" as const,
-            tool: { ...toolBlock.tool, ...finalUpdates },
-          };
-        }
-        return block;
-      });
-
-      return {
-        ...state,
-        tools: {
-          current: updatedTools,
-        },
-        streaming: {
-          ...state.streaming,
-          blocks: updatedBlocks,
-        },
-      };
-    }
-
-    case "UPDATE_TOOL_SUBAGENT": {
-      const { id, subagent } = action.payload;
-
-      // Update in tools.current
-      const updatedTools = state.tools.current.map((tool) => {
-        if (tool.id === id) {
-          return {
-            ...tool,
-            subagent: tool.subagent
-              ? { ...tool.subagent, ...subagent }
-              : (subagent as unknown as SubagentInfo),
-          };
-        }
-        return tool;
-      });
-
-      // Update in streaming blocks
-      const updatedBlocks = state.streaming.blocks.map((block) => {
-        if (block.type === "tool_use") {
-          const toolBlock = block as { type: "tool_use"; tool: ToolUse };
-          if (toolBlock.tool.id === id) {
-            return {
-              type: "tool_use" as const,
-              tool: {
-                ...toolBlock.tool,
-                subagent: toolBlock.tool.subagent
-                  ? { ...toolBlock.tool.subagent, ...subagent }
-                  : (subagent as unknown as SubagentInfo),
-              },
-            };
-          }
-        }
-        return block;
-      });
-
-      return {
-        ...state,
-        tools: {
-          current: updatedTools,
-        },
-        streaming: {
-          ...state.streaming,
-          blocks: updatedBlocks,
-        },
-      };
-    }
-
-    case "UPDATE_LAST_TOOL_INPUT": {
-      const parsedInput = action.payload;
-      const tools = state.tools.current;
-      if (tools.length === 0) return state;
-
-      // Update last tool in tools.current
-      const updatedTools = [...tools];
-      updatedTools[updatedTools.length - 1] = {
-        ...updatedTools[updatedTools.length - 1],
-        input: parsedInput,
-      };
-
-      // Update last tool_use block in streaming blocks
-      const updatedBlocks: ContentBlock[] = [...state.streaming.blocks];
-      for (let i = updatedBlocks.length - 1; i >= 0; i--) {
-        if (updatedBlocks[i].type === "tool_use") {
-          const toolBlock = updatedBlocks[i] as { type: "tool_use"; tool: ToolUse };
-          updatedBlocks[i] = {
-            type: "tool_use",
-            tool: { ...toolBlock.tool, input: parsedInput },
-          };
-          break;
-        }
-      }
-
-      return {
-        ...state,
-        tools: {
-          current: updatedTools,
-        },
-        streaming: {
-          ...state.streaming,
-          blocks: updatedBlocks,
-        },
-      };
-    }
+    // NOTE: UPDATE_TOOL, UPDATE_TOOL_SUBAGENT and UPDATE_LAST_TOOL_INPUT are
+    // handled entirely by the store dispatch in context.tsx with path-based
+    // setState updates (for fine-grained reactivity and the finalized-message
+    // fallback) - they never reach this reducer. Reducer implementations of
+    // those cases previously existed here but had silently diverged from the
+    // live versions; keep the logic in ONE place (context.tsx).
 
     case "SET_TOOLS":
       return {

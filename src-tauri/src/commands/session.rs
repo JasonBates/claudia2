@@ -3,7 +3,7 @@
 use tauri::{ipc::Channel, State};
 use tokio::time::Duration;
 
-use super::{cmd_debug_log, AppState};
+use super::{cmd_debug_log, teardown_process_state, AppState};
 use crate::claude_process::{spawn_claude_process, spawn_claude_process_with_resume};
 use crate::events::ClaudeEvent;
 
@@ -32,19 +32,8 @@ pub async fn start_session(
         &format!("start_session called, working_dir: {:?}", working_dir),
     );
 
-    // Clear all existing state atomically
-    {
-        let mut sender_guard = state.sender.lock().await;
-        let mut receiver_guard = state.receiver.lock().await;
-        let mut handle_guard = state.process_handle.lock().await;
-
-        if sender_guard.is_some() {
-            cmd_debug_log("SESSION", "Dropping existing process");
-        }
-        *sender_guard = None;
-        *receiver_guard = None;
-        *handle_guard = None;
-    }
+    // Tear down any existing process off the locks (shutdown blocks up to ~5s)
+    teardown_process_state(&state.sender, &state.receiver, &state.process_handle).await;
 
     // Determine working directory
     let config = state.config.lock().await;
@@ -95,16 +84,11 @@ pub async fn stop_session(state: State<'_, AppState>) -> Result<(), String> {
         }
     }
 
-    // Clear all state atomically
-    {
-        let mut sender_guard = state.sender.lock().await;
-        let mut receiver_guard = state.receiver.lock().await;
-        let mut handle_guard = state.process_handle.lock().await;
+    // Tear down off the locks - ProcessHandle::drop blocks up to ~5s in shutdown()
+    teardown_process_state(&state.sender, &state.receiver, &state.process_handle).await;
 
-        *sender_guard = None;
-        *receiver_guard = None;
-        *handle_guard = None; // ProcessHandle::drop will call shutdown()
-    }
+    // Remove any stale permission IPC files for this app session
+    let _ = super::secure_ipc::cleanup_session_files(&state.session_id);
 
     Ok(())
 }
@@ -149,19 +133,9 @@ pub async fn resume_session(
     let working_dir = std::path::PathBuf::from(&state.launch_dir);
     let dir_string = working_dir.to_string_lossy().to_string();
 
-    // Clear all existing state atomically
-    {
-        let mut sender_guard = state.sender.lock().await;
-        let mut receiver_guard = state.receiver.lock().await;
-        let mut handle_guard = state.process_handle.lock().await;
-
-        if sender_guard.is_some() {
-            cmd_debug_log("RESUME", "Dropping existing process");
-        }
-        *sender_guard = None;
-        *receiver_guard = None;
-        *handle_guard = None;
-    }
+    // Tear down any existing process off the locks (shutdown blocks up to ~5s)
+    cmd_debug_log("RESUME", "Tearing down existing process (if any)");
+    teardown_process_state(&state.sender, &state.receiver, &state.process_handle).await;
 
     // Small delay to ensure clean shutdown
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -214,19 +188,9 @@ pub async fn clear_session(
     // Use the launch directory (from CLI args or current_dir at startup)
     let working_dir = std::path::PathBuf::from(&state.launch_dir);
 
-    // Clear all existing state atomically
-    {
-        let mut sender_guard = state.sender.lock().await;
-        let mut receiver_guard = state.receiver.lock().await;
-        let mut handle_guard = state.process_handle.lock().await;
-
-        if sender_guard.is_some() {
-            cmd_debug_log("CLEAR", "Dropping existing process");
-        }
-        *sender_guard = None;
-        *receiver_guard = None;
-        *handle_guard = None;
-    }
+    // Tear down any existing process off the locks (shutdown blocks up to ~5s)
+    cmd_debug_log("CLEAR", "Tearing down existing process (if any)");
+    teardown_process_state(&state.sender, &state.receiver, &state.process_handle).await;
 
     // Small delay to ensure clean shutdown
     tokio::time::sleep(Duration::from_millis(100)).await;

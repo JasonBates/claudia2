@@ -14,9 +14,67 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Gate the release build on the full test suite + typecheck so a failing
+  # commit can't be tagged and shipped.
+  test:
+    name: Test
+    runs-on: macos-latest
+
+    steps:
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-release-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-test-
+            ${{ runner.os }}-cargo-release-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run TypeScript tests
+        run: npm run test:run
+
+      - name: Run Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
   build-macos:
     name: Build macOS
     runs-on: macos-latest
+    needs: test
     permissions:
       contents: write
 

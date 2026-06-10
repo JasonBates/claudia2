@@ -47,6 +47,24 @@ const PlanViewer: Component = () => {
     }
   };
 
+  // Mutable holders + a synchronously registered onCleanup. Registering
+  // onCleanup AFTER an await inside async onMount runs outside the SolidJS
+  // owner, so it never executes and the listeners/watcher leak. The disposed
+  // flag covers cleanup racing the still-pending awaits.
+  let disposed = false;
+  let unwatchFile: (() => void) | undefined;
+  let unlisten: (() => void) | undefined;
+  let unlistenTheme: (() => void) | undefined;
+  let unlistenClose: (() => void) | undefined;
+
+  onCleanup(() => {
+    disposed = true;
+    unlisten?.();
+    unlistenTheme?.();
+    unlistenClose?.();
+    unwatchFile?.();
+  });
+
   onMount(async () => {
     const path = getFilePath();
     setFilePath(path);
@@ -59,18 +77,21 @@ const PlanViewer: Component = () => {
       await applyTheme(themeSettings);
     }
 
-    let unwatchFile: (() => void) | undefined;
-
     if (path) {
       await loadContent(path);
 
       // Watch the file for changes
       try {
-        unwatchFile = await watch(path, async (event) => {
+        const unwatch = await watch(path, async (event) => {
           console.log("[PLAN_VIEWER] File changed:", event);
           // Reload content on any change
           await loadContent(path);
         });
+        if (disposed) {
+          unwatch();
+        } else {
+          unwatchFile = unwatch;
+        }
         console.log("[PLAN_VIEWER] File watcher set up for:", path);
       } catch (e) {
         console.error("[PLAN_VIEWER] Failed to watch file:", e);
@@ -78,29 +99,32 @@ const PlanViewer: Component = () => {
     }
 
     // Listen for content updates from main window (backup mechanism)
-    const unlisten = await listen<string>("plan-content-updated", (event) => {
+    const un1 = await listen<string>("plan-content-updated", (event) => {
       console.log("[PLAN_VIEWER] Received content update event");
       setContent(event.payload);
     });
 
     // Listen for theme updates from main window
-    const unlistenTheme = await listen<ThemeSettings>("theme-updated", async (event) => {
+    const un2 = await listen<ThemeSettings>("theme-updated", async (event) => {
       console.log("[PLAN_VIEWER] Received theme update:", event.payload.colorScheme);
       await applyTheme(event.payload);
     });
 
     // Listen for close signal when planning ends
-    const unlistenClose = await listen("plan-window-close", () => {
+    const un3 = await listen("plan-window-close", () => {
       console.log("[PLAN_VIEWER] Received close signal");
       window.close();
     });
 
-    onCleanup(() => {
-      unlisten();
-      unlistenTheme();
-      unlistenClose();
-      unwatchFile?.();
-    });
+    if (disposed) {
+      un1();
+      un2();
+      un3();
+    } else {
+      unlisten = un1;
+      unlistenTheme = un2;
+      unlistenClose = un3;
+    }
   });
 
   return (

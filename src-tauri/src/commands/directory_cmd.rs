@@ -19,6 +19,17 @@ pub struct ClaudeCodeStatus {
     pub path: Option<String>,
 }
 
+/// Reap a spawned window process in the background.
+///
+/// The new window normally outlives this parent, but when it exits first
+/// (user closes it) an un-waited child stays a zombie in our process table
+/// until the app quits. A detached waiter thread costs nothing and reaps it.
+fn reap_in_background(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
 /// Open a new Claudia window with the project picker.
 ///
 /// Re-launches the current executable without any directory argument,
@@ -38,8 +49,12 @@ pub async fn open_new_window_with_picker() -> Result<(), String> {
         .spawn();
 
     match result {
-        Ok(_) => {
-            cmd_debug_log("NEW_WINDOW", "New window (with picker) spawned successfully");
+        Ok(child) => {
+            reap_in_background(child);
+            cmd_debug_log(
+                "NEW_WINDOW",
+                "New window (with picker) spawned successfully",
+            );
             Ok(())
         }
         Err(e) => {
@@ -60,7 +75,10 @@ pub async fn open_new_window_with_picker() -> Result<(), String> {
 pub async fn open_new_window(directory: String, model: Option<String>) -> Result<(), String> {
     cmd_debug_log(
         "NEW_WINDOW",
-        &format!("open_new_window called with: {} model={:?}", directory, model),
+        &format!(
+            "open_new_window called with: {} model={:?}",
+            directory, model
+        ),
     );
 
     // Validate the directory exists
@@ -86,7 +104,8 @@ pub async fn open_new_window(directory: String, model: Option<String>) -> Result
     let result = cmd.spawn();
 
     match result {
-        Ok(_) => {
+        Ok(child) => {
+            reap_in_background(child);
             cmd_debug_log("NEW_WINDOW", "New window spawned successfully");
             Ok(())
         }
@@ -220,18 +239,12 @@ fn find_claude_binary() -> Option<PathBuf> {
         }
     }
 
-    // Check nvm node path (claude is a node-based tool)
-    let nvm_dir = home.join(".nvm/versions/node");
-    if nvm_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
-            let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-            versions.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
-            if let Some(latest) = versions.first() {
-                let bin_path = latest.path().join("bin/claude");
-                if bin_path.exists() {
-                    return Some(bin_path);
-                }
-            }
+    // Check nvm node path (claude is a node-based tool).
+    // Numeric version ordering - see latest_nvm_version_dir.
+    if let Some(latest) = crate::claude_process::latest_nvm_version_dir(&home) {
+        let bin_path = latest.join("bin/claude");
+        if bin_path.exists() {
+            return Some(bin_path);
         }
     }
 
@@ -255,20 +268,27 @@ pub async fn check_claude_code_installed() -> ClaudeCodeStatus {
             &format!("Found claude binary at: {:?}", path),
         );
 
-        // Try to get the version
-        let version = Command::new(path)
-            .arg("--version")
-            .output()
-            .ok()
-            .and_then(|output| {
-                if output.status.success() {
-                    String::from_utf8(output.stdout)
-                        .ok()
-                        .map(|s| s.trim().to_string())
-                } else {
-                    None
-                }
-            });
+        // Try to get the version. `claude --version` boots a node process
+        // (1-2s); run it off the async runtime instead of blocking a worker.
+        let version_path = path.clone();
+        let version = tokio::task::spawn_blocking(move || {
+            Command::new(version_path)
+                .arg("--version")
+                .output()
+                .ok()
+                .and_then(|output| {
+                    if output.status.success() {
+                        String::from_utf8(output.stdout)
+                            .ok()
+                            .map(|s| s.trim().to_string())
+                    } else {
+                        None
+                    }
+                })
+        })
+        .await
+        .ok()
+        .flatten();
 
         cmd_debug_log(
             "CLAUDE_CHECK",

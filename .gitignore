@@ -32,7 +32,6 @@ coverage/
 src-tauri/target/
 
 # Debug logs
-/tmp/claude-*.log
 
 # Local agent scratch (not for the repo)
 context/

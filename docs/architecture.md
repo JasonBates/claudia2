@@ -54,16 +54,16 @@ A Tauri desktop application that wraps the Claude Code CLI, providing a native G
                               │   - Emits typed events   │
                               └────────────┬─────────────┘
                                            │
-                    ┌──────────────────────┼──────────────────────┐
-                    │                      │                      │
-                    ▼                      ▼                      ▼
-        ┌───────────────────┐  ┌───────────────────┐  ┌───────────────────┐
-        │   Claude CLI      │  │  Permission MCP   │  │   Other MCP       │
-        │                   │  │  Server           │  │   Servers         │
-        │   claude --input  │  │                   │  │   (iching, etc)   │
-        │   -format stream  │  │  permission-mcp-  │  │                   │
-        │   -json           │  │  server.mjs       │  │                   │
-        └───────────────────┘  └───────────────────┘  └───────────────────┘
+                              ┌────────────┴─────────────┐
+                              │                          │
+                              ▼                          ▼
+                  ┌───────────────────┐      ┌───────────────────┐
+                  │   Claude CLI      │      │   MCP Servers     │
+                  │                   │      │   (iching, etc)   │
+                  │   claude --input  │      │                   │
+                  │   -format stream  │      │                   │
+                  │   -json           │      │                   │
+                  └───────────────────┘      └───────────────────┘
 ```
 
 
@@ -325,46 +325,16 @@ The SDK expects a specific nested structure. Getting this wrong causes ZodError:
 
 ### 3b. Permission Flow (File-Based - Legacy)
 
-A secondary file-based permission system exists for MCP hook compatibility. This uses `--permission-prompt-tool mcp__...` instead of `stdio`.
+A secondary file-based polling path exists in Rust for hook compatibility
+(`poll_permission_request` / `respond_to_permission`, backed by the hardened
+`secure_ipc` module: app-private 0700 directory, 0600 files, ownership
+verification, atomic writes). It is **disabled by default** and can be
+re-enabled only via `legacy_permission_hook_polling: true` in config.
 
-```
-Claude CLI calls tool
-       │
-       ▼
---permission-prompt-tool routes to MCP server
-       │
-       ▼
-Permission MCP Server (permission-mcp-server.mjs)
-       │
-       ▼
-Writes request to temp file:
-/tmp/claudia-permission-request-{session_id}.json
-       │
-       ▼
-Rust polls file (poll_permission_request command)
-       │
-       ▼
-Frontend receives request, shows PermissionDialog
-       │
-       ▼
-User clicks Allow/Deny
-       │
-       ▼
-Frontend calls respondToPermission()
-       │
-       ▼
-Rust writes response to temp file:
-/tmp/claudia-permission-response-{session_id}.json
-       │
-       ▼
-MCP Server reads response, returns to Claude CLI
-       │
-       ▼
-Claude continues (or aborts if denied)
-```
-
-This flow is legacy and is **disabled by default**. It can be re-enabled only via
-`legacy_permission_hook_polling: true` in config for fallback compatibility.
+The old `permission-mcp-server.mjs` / `permission-hook.js` scripts that
+implemented an earlier insecure version of this flow (predictable world-tmpdir
+paths, no ownership checks) have been deleted; the stream-based control
+protocol above is the production path.
 
 ## Key Files
 
@@ -408,7 +378,6 @@ This flow is legacy and is **disabled by default**. It can be re-enabled only vi
 | File | Purpose |
 |------|---------|
 | `sdk-bridge-v2.mjs` | Node.js process that spawns Claude CLI and translates events |
-| `permission-mcp-server.mjs` | MCP server for handling permission requests |
 
 ## Event Types
 

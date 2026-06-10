@@ -13,7 +13,7 @@ import type {
   Todo,
   Question,
 } from "../types";
-import type { SessionInfo, PermissionRequest } from "../event-handlers";
+import type { SessionInfo, PermissionRequest } from "../types";
 
 /**
  * Result from LLM permission review (Bot mode)

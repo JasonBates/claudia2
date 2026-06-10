@@ -57,10 +57,8 @@ fn get_secure_log_path() -> Option<PathBuf> {
     let log_dir = base_dir.join("com.jasonbates.claudia").join("logs");
 
     // Ensure directory exists with secure permissions
-    if !log_dir.exists() {
-        if std::fs::create_dir_all(&log_dir).is_err() {
-            return None;
-        }
+    if !log_dir.exists() && std::fs::create_dir_all(&log_dir).is_err() {
+        return None;
     }
 
     #[cfg(unix)]
@@ -117,7 +115,10 @@ impl ClaudeSender {
         // terminated, which is exactly the outcome we want from an interrupt.
         if let Err(e) = self.stdin.write_all(interrupt_msg.as_bytes()) {
             if e.kind() == std::io::ErrorKind::BrokenPipe {
-                rust_debug_log("SENDER", "Process already gone (broken pipe), interrupt successful");
+                rust_debug_log(
+                    "SENDER",
+                    "Process already gone (broken pipe), interrupt successful",
+                );
                 return Ok(());
             }
             rust_debug_log("SENDER", &format!("Write error: {}", e));
@@ -210,7 +211,10 @@ impl ProcessHandle {
                 }
             }
             match self.child.wait() {
-                Ok(status) => rust_debug_log("HANDLE", &format!("Child exited after SIGKILL: {:?}", status)),
+                Ok(status) => rust_debug_log(
+                    "HANDLE",
+                    &format!("Child exited after SIGKILL: {:?}", status),
+                ),
                 Err(e) => rust_debug_log("HANDLE", &format!("Wait error: {}", e)),
             }
         }
@@ -274,7 +278,10 @@ pub fn spawn_claude_process_with_resume(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        rust_debug_log("NODE", &format!("Using configured node binary: {}", configured_node));
+        rust_debug_log(
+            "NODE",
+            &format!("Using configured node binary: {}", configured_node),
+        );
         let configured_path = PathBuf::from(configured_node);
         let is_path_like = configured_node.contains('/') || configured_path.is_absolute();
 
@@ -306,8 +313,7 @@ pub fn spawn_claude_process_with_resume(
         .env("FORCE_COLOR", "0")
         .env("CLAUDIA_LAUNCH_DIR", &dir_str);
 
-    cmd
-        .env_remove("CLAUDECODE") // Strip parent Claude Code env so bridge doesn't refuse as "nested session"
+    cmd.env_remove("CLAUDECODE") // Strip parent Claude Code env so bridge doesn't refuse as "nested session"
         .env("CLAUDIA_SESSION_ID", app_session_id)
         .env(
             "CLAUDIA_DEBUG",
@@ -323,8 +329,7 @@ pub fn spawn_claude_process_with_resume(
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    let claude_model = override_model
-        .unwrap_or_else(|| config.claude_model.trim().to_string());
+    let claude_model = override_model.unwrap_or_else(|| config.claude_model.trim().to_string());
     if !claude_model.is_empty() {
         cmd.env("CLAUDIA_MODEL", &claude_model);
     }
@@ -377,47 +382,61 @@ pub fn spawn_claude_process_with_resume(
     Ok((sender, receiver, handle))
 }
 
+/// Parse an nvm directory name like "v18.17.0" into a numeric sort key.
+/// Non-numeric components sort as 0 (lowest).
+fn nvm_version_key(name: &str) -> (u32, u32, u32) {
+    let mut parts = name.trim_start_matches('v').split('.');
+    let mut next = || {
+        parts
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0)
+    };
+    (next(), next(), next())
+}
+
+/// Find the newest installed nvm node version directory.
+///
+/// Versions are compared numerically, NOT lexicographically: "v9.11.2"
+/// sorts after "v18.17.0" as a string ('9' > '1'), which previously made
+/// the bridge launch with an ancient node runtime whenever an old
+/// single-digit-major version was still installed.
+pub fn latest_nvm_version_dir(home: &Path) -> Option<PathBuf> {
+    let nvm_dir = home.join(".nvm/versions/node");
+    let entries = std::fs::read_dir(&nvm_dir).ok()?;
+    entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .max_by_key(|p| {
+            nvm_version_key(
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+                    .as_str(),
+            )
+        })
+}
+
 fn find_node_binary() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
 
     rust_debug_log("NODE", &format!("Looking for node, home={:?}", home));
 
     // Check nvm versions first (most common for macOS dev)
-    let nvm_dir = home.join(".nvm/versions/node");
-    rust_debug_log(
-        "NODE",
-        &format!(
-            "Checking nvm dir: {:?} exists={}",
-            nvm_dir,
-            nvm_dir.exists()
-        ),
-    );
-
-    if nvm_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
-            let mut versions: Vec<_> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect();
-            versions.sort();
-            rust_debug_log("NODE", &format!("Found nvm versions: {:?}", versions));
-
-            if let Some(latest) = versions.last() {
-                let node_path = latest.join("bin/node");
-                rust_debug_log(
-                    "NODE",
-                    &format!(
-                        "Checking nvm node: {:?} exists={}",
-                        node_path,
-                        node_path.exists()
-                    ),
-                );
-                if node_path.exists() {
-                    rust_debug_log("NODE", &format!("Using nvm node: {:?}", node_path));
-                    return Ok(node_path);
-                }
-            }
+    if let Some(latest) = latest_nvm_version_dir(&home) {
+        let node_path = latest.join("bin/node");
+        rust_debug_log(
+            "NODE",
+            &format!(
+                "Checking nvm node: {:?} exists={}",
+                node_path,
+                node_path.exists()
+            ),
+        );
+        if node_path.exists() {
+            rust_debug_log("NODE", &format!("Using nvm node: {:?}", node_path));
+            return Ok(node_path);
         }
     }
 
@@ -512,7 +531,9 @@ fn get_bridge_script_path() -> Result<PathBuf, String> {
 fn read_output_bounded(stdout: ChildStdout, tx: mpsc::Sender<ClaudeEvent>) {
     rust_debug_log("READER", "Starting read_output_bounded loop");
 
-    let reader = BufReader::with_capacity(1024, stdout);
+    // Bridge lines routinely carry multi-hundred-KB tool results; a tiny
+    // buffer means hundreds of read() syscalls per line on the hot path.
+    let reader = BufReader::with_capacity(64 * 1024, stdout);
 
     for line in reader.lines() {
         let line = match line {
@@ -567,7 +588,10 @@ fn read_output_bounded(stdout: ChildStdout, tx: mpsc::Sender<ClaudeEvent>) {
                 // the boundary would panic and kill the reader thread (tearing
                 // down the active session)
                 let preview: String = line.chars().take(100).collect();
-                rust_debug_log("JSON_ERROR", &format!("Parse error: {} - line: {}", e, preview));
+                rust_debug_log(
+                    "JSON_ERROR",
+                    &format!("Parse error: {} - line: {}", e, preview),
+                );
             }
         }
     }
@@ -1688,7 +1712,9 @@ mod tests {
         assert!(path.is_some());
 
         let log_path = path.unwrap();
-        assert!(log_path.to_string_lossy().contains("com.jasonbates.claudia"));
+        assert!(log_path
+            .to_string_lossy()
+            .contains("com.jasonbates.claudia"));
         assert!(log_path.to_string_lossy().contains("logs"));
         assert!(log_path.to_string_lossy().ends_with("claude-debug.log"));
     }
@@ -1824,5 +1850,26 @@ mod tests {
     fn parse_interrupted() {
         let event = parse(json!({ "type": "interrupted" }));
         assert!(matches!(event, Some(ClaudeEvent::Interrupted)));
+    }
+
+    // ============================================================================
+    // nvm version ordering tests
+    // ============================================================================
+
+    #[test]
+    fn nvm_version_key_orders_numerically() {
+        // The historical bug: lexicographic ordering put v9 above v18
+        assert!(nvm_version_key("v18.17.0") > nvm_version_key("v9.11.2"));
+        assert!(nvm_version_key("v22.1.0") > nvm_version_key("v18.20.4"));
+        assert!(nvm_version_key("v18.20.4") > nvm_version_key("v18.2.4"));
+        assert!(nvm_version_key("v18.2.10") > nvm_version_key("v18.2.4"));
+    }
+
+    #[test]
+    fn nvm_version_key_handles_garbage() {
+        assert_eq!(nvm_version_key("not-a-version"), (0, 0, 0));
+        assert_eq!(nvm_version_key(""), (0, 0, 0));
+        // Real versions always beat unparseable directory names
+        assert!(nvm_version_key("v8.0.0") > nvm_version_key(".DS_Store"));
     }
 }
