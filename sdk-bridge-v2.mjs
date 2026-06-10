@@ -149,6 +149,11 @@ async function main() {
   let claude = null;
   let claudeRl = null;
   let currentSessionId = null;
+  // True when currentSessionId was fabricated locally (/clear) rather than
+  // issued by the CLI. A synthetic ID must never be passed to --resume:
+  // the CLI can't load it, exits, and after 2 respawns the bridge falls
+  // back to a fresh session - silently dropping the post-/clear conversation.
+  let sessionIsSynthetic = false;
   let readySent = false;
   let isInterrupting = false;
   let pendingMessages = [];  // Queue messages during respawn
@@ -185,7 +190,7 @@ async function main() {
   // The CLI holds the result message while bg agents are running, causing a 6+ second
   // streaming timeout delay. By sending done on message_stop, we unblock the user immediately.
   let lastStopReason = null;        // stop_reason from most recent message_delta
-  let pendingCliResultAcks = [];    // {turnId, createdAt} entries for late CLI result suppression
+  let pendingCliResultAcks = [];    // {turnId} entries for late CLI result suppression
   let currentTurnId = 0;            // Incremented on each new user message to scope ack matching
 
   // Turn attribution — the CLI starts turns autonomously (background task
@@ -424,7 +429,7 @@ async function main() {
   }
 
   function enqueuePendingCliResultAck() {
-    pendingCliResultAcks.push({ turnId: currentTurnId, createdAt: Date.now() });
+    pendingCliResultAcks.push({ turnId: currentTurnId });
     while (pendingCliResultAcks.length > MAX_PENDING_CLI_RESULT_ACKS) {
       pendingCliResultAcks.shift();
     }
@@ -432,7 +437,13 @@ async function main() {
   }
 
   function consumePendingCliResultAck() {
-    const idx = pendingCliResultAcks.findIndex(entry => entry.turnId < currentTurnId);
+    // <= so a turn's late result consumes the ack enqueued at its own
+    // message_stop (turnId == currentTurnId). Without the equality case,
+    // same-turn acks were never consumable: each turn's result was instead
+    // suppressed by the PREVIOUS turn's stale ack, and a turn that ended
+    // without an end_turn message_stop (error result, max_tokens) had its
+    // result swallowed with no done event ever emitted.
+    const idx = pendingCliResultAcks.findIndex(entry => entry.turnId <= currentTurnId);
     if (idx === -1) return false;
     pendingCliResultAcks.splice(idx, 1);
     return true;
@@ -1936,6 +1947,7 @@ async function main() {
             if (msg.subtype === "init" && !readySent) {
               // Store session ID for subsequent messages
               currentSessionId = msg.session_id;
+              sessionIsSynthetic = false;
               debugLog("SESSION_ID", currentSessionId);
               sendEvent("ready", {
                 sessionId: msg.session_id,
@@ -1951,6 +1963,7 @@ async function main() {
               // Extract session_id from the SessionStart hook response to send a ready event.
               if (msg.hook_event === "SessionStart" && msg.outcome === "success" && msg.session_id) {
                 currentSessionId = msg.session_id;
+                sessionIsSynthetic = false;
                 debugLog("SESSION_ID_FROM_HOOK", currentSessionId);
                 sendEvent("ready", {
                   sessionId: msg.session_id,
@@ -2385,10 +2398,28 @@ async function main() {
             }
 
             // Suppress late CLI MAIN result when we already sent early done on message_stop.
-            // This must happen before bg-agent handling. Ack entries self-expire
-            // so unmatched done events can't leak suppression into later turns.
+            // This must happen before bg-agent handling. Acks are bounded
+            // (MAX_PENDING_CLI_RESULT_ACKS) and cleared on respawn, so
+            // unmatched entries can't accumulate indefinitely.
+            // Main results carry the session ID the CLI actually uses.
+            // Re-sync so a post-/clear synthetic ID is replaced with the
+            // real one as soon as the first turn completes.
+            if (msg.session_id) {
+              currentSessionId = msg.session_id;
+              sessionIsSynthetic = false;
+            }
+
             if (consumePendingCliResultAck()) {
               mainResultSent = true;  // Enable bg agent result handling
+              // A suppressed result should be a normal end_turn one (its done
+              // already went out). If it carries an error anyway, surface it
+              // rather than swallowing the failure silently.
+              if (msg.is_error) {
+                sendEvent("error", {
+                  message: (typeof msg.result === "string" && msg.result
+                    ? msg.result : "Turn ended with an error").slice(0, 500)
+                });
+              }
               debugLog("LATE_CLI_RESULT_SUPPRESSED", {
                 cost: msg.total_cost_usd,
                 duration: msg.duration_ms,
@@ -2498,12 +2529,16 @@ async function main() {
         return;
       }
 
-      const sessionToResume = currentSessionId;
+      // Never --resume a fabricated /clear session ID - the CLI can't load
+      // it. Force a fresh session instead (false skips the env var too).
+      const sessionToResume = sessionIsSynthetic ? false : currentSessionId;
 
       if (isInterrupting) {
         // Interrupted by user - respawn immediately, reset rate limit
         respawnCount = 0;
-        debugLog("RESPAWN", `Respawning Claude with --resume ${sessionToResume?.slice(0,8)}... (interrupted)`);
+        debugLog("RESPAWN", sessionToResume
+          ? `Respawning Claude with --resume ${sessionToResume.slice(0,8)}... (interrupted)`
+          : "Respawning Claude with fresh session (interrupted)");
         sendEvent("interrupted", {});
       } else {
         // Unexpected exit - respawn with rate limiting
@@ -2564,6 +2599,71 @@ async function main() {
     }
   }
 
+  // Forward a UI control message (permission / question response or cancel)
+  // to the CLI as a control_response. Returns true if the type was handled.
+  // The inner response must match the canUseTool callback return format:
+  //   allow: { behavior: "allow", updatedInput: {...} }
+  //   deny:  { behavior: "deny", message: "..." }
+  function forwardControlResponse(parsed, sourceTag) {
+    let response;
+    if (parsed.type === "control_response") {
+      response = parsed.allow
+        ? { behavior: "allow", updatedInput: parsed.tool_input || {} }
+        : { behavior: "deny", message: parsed.message || "User denied permission" };
+    } else if (parsed.type === "question_response") {
+      response = {
+        behavior: "allow",
+        updatedInput: { questions: parsed.questions, answers: parsed.answers }
+      };
+    } else if (parsed.type === "question_cancel") {
+      response = { behavior: "deny", message: "User cancelled the question" };
+    } else {
+      return false;
+    }
+
+    debugLog(`${parsed.type.toUpperCase()}_${sourceTag}`, parsed);
+    const msg = JSON.stringify({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: parsed.request_id,
+        response
+      }
+    }) + "\n";
+
+    debugLog("CLAUDE_STDIN", msg);
+    if (claude && claude.stdin.writable) {
+      claude.stdin.write(msg);
+    }
+    return true;
+  }
+
+  // Toggle or set the extended 1M context window by switching model via CLI.
+  // arg: "on" | "off" | undefined (toggle)
+  function handle1mToggle(arg) {
+    const baseModel = (process.env.CLAUDIA_MODEL || "").trim().replace(/\[1m\]$/i, "") || "opus";
+    if (arg === "on") extended1mEnabled = true;
+    else if (arg === "off") extended1mEnabled = false;
+    else extended1mEnabled = !extended1mEnabled;
+    const newModel = extended1mEnabled ? `${baseModel}[1m]` : baseModel;
+    const newLimit = extended1mEnabled ? "1M" : "200K";
+    debugLog("1M_TOGGLE", { model: newModel, enabled: extended1mEnabled });
+    const modelMsg = JSON.stringify({
+      type: "user",
+      message: { role: "user", content: `/model ${newModel}` },
+      session_id: currentSessionId,
+      parent_tool_use_id: null
+    }) + "\n";
+    if (claude && claude.stdin.writable) {
+      claude.stdin.write(modelMsg);
+      pendingUserTurns++;
+    }
+    // Emit ready with updated model so frontend updates context limit display
+    sendEvent("ready", { sessionId: currentSessionId, model: newModel, tools: 0 });
+    sendEvent("status", { message: `Context window: ${newLimit}` });
+    sendEvent("done", {});
+  }
+
   // Send a user message to Claude
   // Supports both plain text and JSON-prefixed multimodal messages
   function sendUserMessage(content) {
@@ -2592,8 +2692,15 @@ async function main() {
         debugLog("MULTIMODAL", `Sending ${messageContent.length} content blocks (${messageContent.filter(b => b.type === "image").length} images)`);
       } catch (e) {
         debugLog("MULTIMODAL_ERROR", `Failed to parse JSON content: ${e.message}`);
-        // Fallback to plain text
-        messageContent = `[${dateTime}] ${content}`;
+        // Fallback: salvage any text blocks rather than sending the raw
+        // __JSON__{...} protocol envelope to the model as literal text.
+        const salvaged = (content.slice(8).match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g) || [])
+          .map(m => {
+            try { return JSON.parse(`{${m}}`).text; } catch { return ""; }
+          })
+          .filter(Boolean)
+          .join("\n");
+        messageContent = `[${dateTime}] ${salvaged || "[message content could not be parsed]"}`;
       }
     } else {
       // Plain text (existing behavior)
@@ -2729,85 +2836,8 @@ async function main() {
           return;
         }
 
-        // Handle permission response (control_response)
-        if (parsed.type === "control_response") {
-          debugLog("CONTROL_RESPONSE_FROM_UI", parsed);
-
-          // Send control_response to Claude - format matches SDK's internal structure:
-          // { type: "control_response", response: { subtype: "success", request_id, response: {...} } }
-          // The inner response must match canUseTool callback return format:
-          // For "allow": { behavior: "allow", updatedInput: {...} }
-          // For "deny": { behavior: "deny", message: "..." }
-          // When denying with feedback (e.g., plan iteration), use the message from the UI
-          const permissionResponse = parsed.allow
-            ? { behavior: "allow", updatedInput: parsed.tool_input || {} }
-            : { behavior: "deny", message: parsed.message || "User denied permission" };
-
-          const msg = JSON.stringify({
-            type: "control_response",
-            response: {
-              subtype: "success",
-              request_id: parsed.request_id,
-              response: permissionResponse
-            }
-          }) + "\n";
-
-          debugLog("CLAUDE_STDIN", msg);
-          if (claude && claude.stdin.writable) {
-            claude.stdin.write(msg);
-          }
-          return;
-        }
-
-        // Handle AskUserQuestion response
-        if (parsed.type === "question_response") {
-          debugLog("QUESTION_RESPONSE_FROM_UI", parsed);
-
-          // Send control_response with answers in the format AskUserQuestion expects:
-          // { behavior: "allow", updatedInput: { questions: [...], answers: {...} } }
-          const msg = JSON.stringify({
-            type: "control_response",
-            response: {
-              subtype: "success",
-              request_id: parsed.request_id,
-              response: {
-                behavior: "allow",
-                updatedInput: {
-                  questions: parsed.questions,
-                  answers: parsed.answers
-                }
-              }
-            }
-          }) + "\n";
-
-          debugLog("CLAUDE_STDIN", msg);
-          if (claude && claude.stdin.writable) {
-            claude.stdin.write(msg);
-          }
-          return;
-        }
-
-        // Handle AskUserQuestion cancellation
-        if (parsed.type === "question_cancel") {
-          debugLog("QUESTION_CANCEL_FROM_UI", parsed);
-
-          // Send control_response with deny to let Claude continue
-          const msg = JSON.stringify({
-            type: "control_response",
-            response: {
-              subtype: "success",
-              request_id: parsed.request_id,
-              response: {
-                behavior: "deny",
-                message: "User cancelled the question"
-              }
-            }
-          }) + "\n";
-
-          debugLog("CLAUDE_STDIN", msg);
-          if (claude && claude.stdin.writable) {
-            claude.stdin.write(msg);
-          }
+        // Permission response, AskUserQuestion response, or cancellation
+        if (forwardControlResponse(parsed, "FROM_UI")) {
           return;
         }
       } catch (e) {
@@ -2827,69 +2857,7 @@ async function main() {
         // These need to be handled specially, not sent as user messages
         try {
           const innerParsed = JSON.parse(text);
-          if (innerParsed.type === "control_response") {
-            debugLog("CONTROL_RESPONSE_FROM_MSG", innerParsed);
-            // Handle control_response - format for Claude SDK
-            const permissionResponse = innerParsed.allow
-              ? { behavior: "allow", updatedInput: innerParsed.tool_input || {} }
-              : { behavior: "deny", message: innerParsed.message || "User denied permission" };
-
-            const msg = JSON.stringify({
-              type: "control_response",
-              response: {
-                subtype: "success",
-                request_id: innerParsed.request_id,
-                response: permissionResponse
-              }
-            }) + "\n";
-
-            debugLog("CLAUDE_STDIN_FROM_MSG", msg);
-            if (claude && claude.stdin.writable) {
-              claude.stdin.write(msg);
-            }
-            return;
-          }
-
-          if (innerParsed.type === "question_response") {
-            debugLog("QUESTION_RESPONSE_FROM_MSG", innerParsed);
-            const msg = JSON.stringify({
-              type: "control_response",
-              response: {
-                subtype: "success",
-                request_id: innerParsed.request_id,
-                response: {
-                  behavior: "allow",
-                  updatedInput: {
-                    questions: innerParsed.questions,
-                    answers: innerParsed.answers
-                  }
-                }
-              }
-            }) + "\n";
-
-            if (claude && claude.stdin.writable) {
-              claude.stdin.write(msg);
-            }
-            return;
-          }
-
-          if (innerParsed.type === "question_cancel") {
-            debugLog("QUESTION_CANCEL_FROM_MSG", innerParsed);
-            const msg = JSON.stringify({
-              type: "control_response",
-              response: {
-                subtype: "success",
-                request_id: innerParsed.request_id,
-                response: {
-                  behavior: "deny",
-                  message: "User cancelled the question"
-                }
-              }
-            }) + "\n";
-
-            if (claude && claude.stdin.writable) {
-              claude.stdin.write(msg);
-            }
+          if (forwardControlResponse(innerParsed, "FROM_MSG")) {
             return;
           }
           // Other JSON messages can fall through to be sent as user messages
@@ -2900,29 +2868,7 @@ async function main() {
         // Handle /1m locally (toggle extended context window)
         const trimmedLower = text.trim().toLowerCase();
         if (trimmedLower.startsWith("/1m")) {
-          const parts = trimmedLower.split(/\s+/);
-          const arg = parts[1];
-          const baseModel = (process.env.CLAUDIA_MODEL || "").trim().replace(/\[1m\]$/i, "") || "opus";
-          if (arg === "on") extended1mEnabled = true;
-          else if (arg === "off") extended1mEnabled = false;
-          else extended1mEnabled = !extended1mEnabled;
-          const newModel = extended1mEnabled ? `${baseModel}[1m]` : baseModel;
-          const newLimit = extended1mEnabled ? "1M" : "200K";
-          debugLog("1M_TOGGLE", { model: newModel, enabled: extended1mEnabled });
-          const modelMsg = JSON.stringify({
-            type: "user",
-            message: { role: "user", content: `/model ${newModel}` },
-            session_id: currentSessionId,
-            parent_tool_use_id: null
-          }) + "\n";
-          if (claude && claude.stdin.writable) {
-            claude.stdin.write(modelMsg);
-            pendingUserTurns++;
-          }
-          // Emit ready with updated model so frontend updates context limit display
-          sendEvent("ready", { sessionId: currentSessionId, model: newModel, tools: 0 });
-          sendEvent("status", { message: `Context window: ${newLimit}` });
-          sendEvent("done", {});
+          handle1mToggle(trimmedLower.split(/\s+/)[1]);
           return;
         }
 
@@ -2968,32 +2914,11 @@ async function main() {
             message: "Commands: /compact, /clear, /cost, /model, /1m, /status, /config, /memory, /review, /doctor, /exit"
           });
           return;
-        case "1m": {
+        case "1m":
           // Toggle or set extended 1M context window by switching model via CLI
           // Usage: /1m (toggle), /1m on, /1m off
-          const arg = args[0]?.toLowerCase();
-          const baseModel = (process.env.CLAUDIA_MODEL || "").trim().replace(/\[1m\]$/i, "") || "opus";
-          if (arg === "on") extended1mEnabled = true;
-          else if (arg === "off") extended1mEnabled = false;
-          else extended1mEnabled = !extended1mEnabled;
-          const newModel = extended1mEnabled ? `${baseModel}[1m]` : baseModel;
-          const newLimit = extended1mEnabled ? "1M" : "200K";
-          debugLog("1M_TOGGLE", { model: newModel, enabled: extended1mEnabled });
-          const modelMsg = JSON.stringify({
-            type: "user",
-            message: { role: "user", content: `/model ${newModel}` },
-            session_id: currentSessionId,
-            parent_tool_use_id: null
-          }) + "\n";
-          if (claude && claude.stdin.writable) {
-            claude.stdin.write(modelMsg);
-            pendingUserTurns++;
-          }
-          sendEvent("ready", { sessionId: currentSessionId, model: newModel, tools: 0 });
-          sendEvent("status", { message: `Context window: ${newLimit}` });
-          sendEvent("done", {});
+          handle1mToggle(args[0]?.toLowerCase());
           return;
-        }
         case "clear":
           // Handle /clear locally by generating a new session ID
           // This makes the CLI treat subsequent messages as a new conversation
@@ -3026,6 +2951,7 @@ async function main() {
           bgOutputRecoveryInFlight.clear();
 
           currentSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          sessionIsSynthetic = true;
           debugLog("CLEAR", `New session ID: ${currentSessionId}`);
           sendEvent("status", { message: "Context cleared" });
           sendEvent("ready", {
@@ -3051,6 +2977,15 @@ async function main() {
       if (claude && claude.stdin.writable) {
         claude.stdin.write(slashMsg);
         pendingUserTurns++;
+      } else {
+        // CLI is mid-respawn (e.g. right after an interrupt). Queue instead
+        // of dropping - sendPendingMessages bumps pendingUserTurns on write.
+        debugLog("QUEUE", "Queueing slash command - Claude process not ready");
+        if (pendingMessages.length >= MAX_PENDING_MESSAGES) {
+          pendingMessages.shift();
+          debugLog("QUEUE", "Queue full, dropped oldest message");
+        }
+        pendingMessages.push(slashMsg);
       }
       return;
     }
@@ -3060,9 +2995,23 @@ async function main() {
   });
 
   inputRl.on("close", () => {
+    // Parent closed our stdin - that's always a shutdown signal (the Tauri
+    // app is exiting or crashed). Without isShuttingDown, the CLI's exit on
+    // stdin EOF would be treated as unexpected and trigger a respawn,
+    // leaving an orphaned bridge+CLI pair (or a wasted spawn cycle).
+    debugLog("STDIN_CLOSE", "Parent closed stdin, shutting down");
+    isShuttingDown = true;
     if (claude && claude.stdin) {
       claude.stdin.end();
     }
+    // Grace period for the CLI to exit on EOF (stop hooks etc.), then make
+    // sure we don't linger. The claude.on("close") handler exits sooner in
+    // the normal case.
+    const forceExitTimer = setTimeout(() => {
+      if (claude) claude.kill("SIGTERM");
+      process.exit(0);
+    }, 10000);
+    forceExitTimer.unref();
   });
 
   process.on("SIGINT", () => {

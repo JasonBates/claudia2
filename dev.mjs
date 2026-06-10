@@ -6,12 +6,10 @@ import { basename } from "path";
 const BASE_PORT = 1420;
 const MAX_PORT = 1500;
 
-// Common ports to skip
+// Common ports to skip (within the 1420-1500 scan range)
 const SKIP_PORTS = new Set([
   1433, // SQL Server
   1434, // SQL Server Browser
-  1521, // Oracle DB
-  1433, // MySQL (sometimes)
 ]);
 
 function isPortAvailable(port) {
