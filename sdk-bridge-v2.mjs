@@ -84,6 +84,16 @@ function getTimezone() {
 // provider key (e.g. NEBIUS_API_KEY) and routes per ~/.claude-code-router/config.json.
 // `upstreamModel` is the model id ccr expects; `authToken` mirrors ccr's APIKEY
 // (defaults to "test" when ccr has no APIKEY configured).
+//
+// REQUIRED ccr config for GLM (and similar OpenAI-transformer providers): the
+// provider's transformer MUST be `"transformer": { "use": ["enhancetool", "openai"] }`.
+// GLM streams tool-call argument deltas that ccr's plain `openai` transformer
+// reassembles lossily (dropped/duplicated fragments -> malformed tool_use JSON ->
+// the CLI throws InputValidationError on commands like `grep -nE 'a|b' f | head`).
+// `enhancetool` de-streams ONLY tool calls (text still streams) and repairs the
+// args via JSON->JSON5->jsonrepair; it must come BEFORE `openai` in the list, or it
+// emits empty `{}` args. (`tooluse` does NOT help — it's only a system-prompt nudge.)
+// See ~/.claude-code-router/config.json; repro harness in this repo's .context/.
 const ROUTER_MODELS = {
   "glm-5.2": {
     upstreamModel: "zai-org/GLM-5.2",
