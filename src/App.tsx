@@ -1458,7 +1458,19 @@ function App() {
   // ============================================================================
 
   return (
-    <div class="app" classList={{ "cursor-hidden": keyboardCursor.cursorHidden() }}>
+    <div
+      class="app"
+      classList={{
+        "cursor-hidden": keyboardCursor.cursorHidden(),
+        "model-family-router":
+          settings.availableModels.find((m) => m.value === settings.claudeModel())?.family ===
+          "router",
+      }}
+      style={{
+        "--model-accent":
+          settings.availableModels.find((m) => m.value === settings.claudeModel())?.accent ?? "",
+      }}
+    >
       {/* Session Sidebar */}
       <ErrorBoundary fallback={(err, reset) => <ErrorFallback error={err} reset={reset} section="the sidebar" />}>
         <Sidebar
