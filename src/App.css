@@ -71,6 +71,24 @@ body {
   max-height: 100vh;
 }
 
+/*
+ * Non-Claude model family indicator. When the window runs a "router" family model
+ * (e.g. GLM 5.2 via Claude Code Router) the root carries .model-family-router and a
+ * --model-accent colour; we draw a lime outline just inside the window edge so it is
+ * obvious at a glance this window is a different model family. pointer-events: none
+ * keeps it purely decorative.
+ */
+.app.model-family-router::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  border: 3px solid var(--model-accent, #a3e635);
+  border-radius: 10px;
+  box-shadow: inset 0 0 12px color-mix(in srgb, var(--model-accent, #a3e635) 35%, transparent);
+}
+
 /* Main content wrapper (everything except sidebar) */
 .app-content {
   display: flex;

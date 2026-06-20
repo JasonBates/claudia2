@@ -24,6 +24,14 @@ export interface FontOption {
 export interface ModelOption {
   label: string;
   value: string;
+  /**
+   * Model family. Defaults to "claude" (Anthropic, native auth). "router" marks a
+   * non-Claude model proxied through Claude Code Router (ccr); the bridge points the
+   * Claude CLI at the local ccr endpoint and the window gets an accent outline.
+   */
+  family?: "claude" | "router";
+  /** Outline accent colour for the window when this model is active (router models). */
+  accent?: string;
 }
 
 export interface UseSettingsReturn {
@@ -70,6 +78,9 @@ const CURATED_MODELS: ModelOption[] = [
   { label: "Opus 4.7", value: "claude-opus-4-7" },
   { label: "Opus 4.6", value: "claude-opus-4-6" },
   { label: "Sonnet 4.6", value: "sonnet" },
+  // Non-Claude models proxied through Claude Code Router (ccr must be running).
+  // Selecting one opens a new window routed to ccr, flagged with a lime outline.
+  { label: "GLM 5.2 (Nebius)", value: "glm-5.2", family: "router", accent: "#a3e635" },
 ];
 
 const DEFAULT_MARGIN = 16;

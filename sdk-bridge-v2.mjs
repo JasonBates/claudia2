@@ -12,7 +12,8 @@
  * - The bridge stays running, so next message is fast
  */
 
-import { spawn } from "child_process";
+import { spawn, execSync } from "child_process";
+import * as net from "net";
 import * as readline from "readline";
 import * as fs from "fs";
 import { writeFileSync, existsSync } from "fs";
@@ -75,6 +76,117 @@ function findBinary(name) {
 // Get timezone (already descriptive: "Europe/London", "America/Chicago", etc.)
 function getTimezone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+// Non-Claude models proxied through Claude Code Router (ccr). When CLAUDIA_MODEL
+// matches one of these slugs, we point the Claude CLI at the local ccr endpoint
+// instead of Anthropic. ccr (`ccr start`) must be running; it owns the upstream
+// provider key (e.g. NEBIUS_API_KEY) and routes per ~/.claude-code-router/config.json.
+// `upstreamModel` is the model id ccr expects; `authToken` mirrors ccr's APIKEY
+// (defaults to "test" when ccr has no APIKEY configured).
+const ROUTER_MODELS = {
+  "glm-5.2": {
+    upstreamModel: "zai-org/GLM-5.2",
+    baseUrl: "http://127.0.0.1:3456",
+    authToken: "test",
+  },
+};
+
+// Resolve the ccr router config for the active CLAUDIA_MODEL, or null for native Claude.
+function getRouterConfig() {
+  const model = (process.env.CLAUDIA_MODEL || "").trim();
+  return ROUTER_MODELS[model] || null;
+}
+
+// Locate the `ccr` binary, or null if Claude Code Router isn't installed.
+function findCcrBinary() {
+  const candidate = findBinary("ccr");
+  if (candidate && candidate.includes("/") && existsSync(candidate)) return candidate;
+  // findBinary falls back to the bare name when nothing matched; try PATH directly.
+  try {
+    const resolved = execSync("command -v ccr", { encoding: "utf8" }).trim();
+    if (resolved) return resolved;
+  } catch {
+    /* not on PATH */
+  }
+  return null;
+}
+
+// Resolve once the local ccr endpoint accepts TCP connections (i.e. is up).
+function isEndpointUp(baseUrl, timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    let url;
+    try {
+      url = new URL(baseUrl);
+    } catch {
+      resolve(false);
+      return;
+    }
+    const socket = net.connect(
+      { host: url.hostname, port: Number(url.port) },
+      () => {
+        socket.destroy();
+        resolve(true);
+      }
+    );
+    socket.on("error", () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.setTimeout(timeoutMs, () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Ensure Claude Code Router is installed and running before a router-family model
+// spawns the Claude CLI. Returns { ok: true } when reachable, or
+// { ok: false, message } with actionable guidance for the UI error banner.
+async function ensureRouterReady(router) {
+  // Already up? Nothing to do.
+  if (await isEndpointUp(router.baseUrl)) {
+    debugLog("ROUTER", "ccr already running");
+    return { ok: true };
+  }
+
+  // Not up — is it even installed?
+  const ccrPath = findCcrBinary();
+  if (!ccrPath) {
+    return {
+      ok: false,
+      message:
+        "Claude Code Router (ccr) is not installed — required for non-Claude models.\n" +
+        "Install it with:  npm install -g @musistudio/claude-code-router\n" +
+        "Then reopen this model.",
+    };
+  }
+
+  // Installed but not running — start it in the background.
+  debugLog("ROUTER", `ccr not running, starting via ${ccrPath}`);
+  try {
+    const child = spawn(ccrPath, ["start"], { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch (e) {
+    return { ok: false, message: `Failed to start Claude Code Router: ${e.message}` };
+  }
+
+  // Poll for readiness (ccr takes a moment to bind its port).
+  for (let i = 0; i < 30; i++) {
+    await sleep(500);
+    if (await isEndpointUp(router.baseUrl)) {
+      debugLog("ROUTER", `ccr ready after ~${(i + 1) * 0.5}s`);
+      return { ok: true };
+    }
+  }
+  return {
+    ok: false,
+    message:
+      `Claude Code Router did not become ready on ${router.baseUrl} within 15s.\n` +
+      "Try running `ccr start` in a terminal and check `ccr status`.",
+  };
 }
 
 // Format current date/time for prompt injection
@@ -233,7 +345,12 @@ async function main() {
 
   // Build Claude args - optionally resume a session
   function buildClaudeArgs(resumeSessionId = null) {
-    const model = (process.env.CLAUDIA_MODEL || "").trim() || "opus";
+    // For router (ccr) models, send the upstream provider model id; otherwise the
+    // CLAUDIA_MODEL slug is a native Claude alias passed straight through.
+    const router = getRouterConfig();
+    const model = router
+      ? router.upstreamModel
+      : (process.env.CLAUDIA_MODEL || "").trim() || "opus";
     const settings = { alwaysThinkingEnabled: true };
 
     // Enable SDK sandbox when CLAUDIA_SANDBOX is set
@@ -1897,11 +2014,31 @@ async function main() {
     autoTurn = false;
     expectedAutoResults = 0;
 
+    // For ccr router models, redirect the Claude CLI at the local router and use a
+    // bearer token instead of native Anthropic auth (mirrors what `ccr code` sets).
+    // ANTHROPIC_API_KEY is cleared so it can't conflict with the router token.
+    const router = getRouterConfig();
+    const routerEnv = router
+      ? {
+          ANTHROPIC_BASE_URL: router.baseUrl,
+          ANTHROPIC_AUTH_TOKEN: router.authToken,
+          ANTHROPIC_API_KEY: undefined,
+          NO_PROXY: "127.0.0.1",
+          DISABLE_TELEMETRY: "true",
+          DISABLE_COST_WARNINGS: "true",
+          API_TIMEOUT_MS: "600000",
+        }
+      : {};
+    if (router) {
+      debugLog("ROUTER", { baseUrl: router.baseUrl, model: router.upstreamModel });
+    }
+
     claude = spawn(claudePath, buildClaudeArgs(resumeSessionId), {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
-        MAX_THINKING_TOKENS: "10000"
+        MAX_THINKING_TOKENS: "10000",
+        ...routerEnv
       }
     });
     claudeChild = claude;  // For fatal-exit reaping (see reapClaude)
@@ -2778,6 +2915,20 @@ async function main() {
         try { target.kill('SIGKILL'); } catch { /* already gone */ }
       }
     }, 3000);
+  }
+
+  // For non-Claude (router) models, make sure Claude Code Router is installed and
+  // running before we spawn the CLI — otherwise the CLI just fails to connect with
+  // an opaque error. On failure we surface actionable guidance and skip the spawn
+  // (the warmup below is a no-op while `claude` stays null).
+  const startupRouter = getRouterConfig();
+  if (startupRouter) {
+    const ready = await ensureRouterReady(startupRouter);
+    if (!ready.ok) {
+      debugLog("ROUTER", `not ready: ${ready.message}`);
+      sendEvent("error", { message: ready.message });
+      return;
+    }
   }
 
   // Initial spawn
