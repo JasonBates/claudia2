@@ -62,7 +62,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "../sdk-bridge-v2.mjs"
+      "../sdk-bridge-v2.mjs",
+      "../scripts/glm-shim.mjs"
     ],
     "macOS": {
       "signingIdentity": "-"

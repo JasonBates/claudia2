@@ -78,47 +78,34 @@ function getTimezone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
-// Non-Claude models proxied through Claude Code Router (ccr). When CLAUDIA_MODEL
-// matches one of these slugs, we point the Claude CLI at the local ccr endpoint
-// instead of Anthropic. ccr (`ccr start`) must be running; it owns the upstream
-// provider key (e.g. NEBIUS_API_KEY) and routes per ~/.claude-code-router/config.json.
-// `upstreamModel` is the model id ccr expects; `authToken` mirrors ccr's APIKEY
-// (defaults to "test" when ccr has no APIKEY configured).
-//
-// REQUIRED ccr config for GLM (and similar OpenAI-transformer providers): the
-// provider's transformer MUST be `"transformer": { "use": ["enhancetool", "openai"] }`.
-// GLM streams tool-call argument deltas that ccr's plain `openai` transformer
-// reassembles lossily (dropped/duplicated fragments -> malformed tool_use JSON ->
-// the CLI throws InputValidationError on commands like `grep -nE 'a|b' f | head`).
-// `enhancetool` de-streams ONLY tool calls (text still streams) and repairs the
-// args via JSON->JSON5->jsonrepair; it must come BEFORE `openai` in the list, or it
-// emits empty `{}` args. (`tooluse` does NOT help — it's only a system-prompt nudge.)
-// See ~/.claude-code-router/config.json; repro harness in this repo's .context/.
+// Non-Claude models routed through the GLM-aware shim (scripts/glm-shim.mjs). When
+// CLAUDIA_MODEL matches one of these slugs we point the Claude CLI at the local shim,
+// which translates Anthropic<->OpenAI and talks to the upstream provider (Nebius)
+// directly. The shim replaces Claude Code Router for this path because ccr's streaming
+// OpenAI->Anthropic tool-call reassembly drops ~5-8% of argument fragments; the shim
+// accumulates them correctly (100% clean tool calls) while keeping true real-time
+// streaming for text + thinking, and injects chat_template_kwargs so GLM reasons.
+// `upstreamModel` is the model id the provider expects; `authToken` is a dummy the
+// shim ignores (the shim reads NEBIUS_API_KEY from env or the launch-dir .env).
 const ROUTER_MODELS = {
   "glm-5.2": {
     upstreamModel: "zai-org/GLM-5.2",
-    baseUrl: "http://127.0.0.1:3456",
+    baseUrl: "http://127.0.0.1:3457", // glm-shim (what ANTHROPIC_BASE_URL points at)
     authToken: "test",
   },
 };
 
-// Resolve the ccr router config for the active CLAUDIA_MODEL, or null for native Claude.
+// Resolve the router config for the active CLAUDIA_MODEL, or null for native Claude.
 function getRouterConfig() {
   const model = (process.env.CLAUDIA_MODEL || "").trim();
   return ROUTER_MODELS[model] || null;
 }
 
-// Locate the `ccr` binary, or null if Claude Code Router isn't installed.
-function findCcrBinary() {
-  const candidate = findBinary("ccr");
-  if (candidate && candidate.includes("/") && existsSync(candidate)) return candidate;
-  // findBinary falls back to the bare name when nothing matched; try PATH directly.
-  try {
-    const resolved = execSync("command -v ccr", { encoding: "utf8" }).trim();
-    if (resolved) return resolved;
-  } catch {
-    /* not on PATH */
-  }
+// Locate the GLM shim script bundled alongside this bridge.
+function findShimScript() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [join(here, "scripts", "glm-shim.mjs"), join(here, "glm-shim.mjs")];
+  for (const p of candidates) if (existsSync(p)) return p;
   return null;
 }
 
@@ -152,51 +139,40 @@ function isEndpointUp(baseUrl, timeoutMs = 1000) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Ensure Claude Code Router is installed and running before a router-family model
-// spawns the Claude CLI. Returns { ok: true } when reachable, or
-// { ok: false, message } with actionable guidance for the UI error banner.
+// Ensure the GLM shim is running before a router-family model spawns the Claude CLI.
+// The shim talks to Nebius directly, so no external service (ccr) is required.
+// Returns { ok: true } when reachable, or { ok: false, message } for the UI banner.
 async function ensureRouterReady(router) {
-  // Already up? Nothing to do.
   if (await isEndpointUp(router.baseUrl)) {
-    debugLog("ROUTER", "ccr already running");
+    debugLog("ROUTER", "glm shim already running");
     return { ok: true };
   }
-
-  // Not up — is it even installed?
-  const ccrPath = findCcrBinary();
-  if (!ccrPath) {
-    return {
-      ok: false,
-      message:
-        "Claude Code Router (ccr) is not installed — required for non-Claude models.\n" +
-        "Install it with:  npm install -g @musistudio/claude-code-router\n" +
-        "Then reopen this model.",
-    };
+  const shimPath = findShimScript();
+  if (!shimPath) {
+    return { ok: false, message: "GLM shim (scripts/glm-shim.mjs) not found next to the bridge." };
   }
-
-  // Installed but not running — start it in the background.
-  debugLog("ROUTER", `ccr not running, starting via ${ccrPath}`);
+  const shimPort = new URL(router.baseUrl).port;
+  debugLog("ROUTER", `starting glm shim ${shimPath} on :${shimPort}`);
   try {
-    const child = spawn(ccrPath, ["start"], { detached: true, stdio: "ignore" });
+    // Inherit env (incl. NEBIUS_API_KEY + CLAUDIA_LAUNCH_DIR so the shim can read the
+    // launch-dir .env when the GUI app doesn't carry the key in its environment).
+    const child = spawn(process.execPath, [shimPath], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, GLM_SHIM_PORT: shimPort },
+    });
     child.unref();
   } catch (e) {
-    return { ok: false, message: `Failed to start Claude Code Router: ${e.message}` };
+    return { ok: false, message: `Failed to start GLM shim: ${e.message}` };
   }
-
-  // Poll for readiness (ccr takes a moment to bind its port).
-  for (let i = 0; i < 30; i++) {
-    await sleep(500);
+  for (let i = 0; i < 24; i++) {
+    await sleep(250);
     if (await isEndpointUp(router.baseUrl)) {
-      debugLog("ROUTER", `ccr ready after ~${(i + 1) * 0.5}s`);
+      debugLog("ROUTER", `glm shim ready after ~${(i + 1) * 0.25}s`);
       return { ok: true };
     }
   }
-  return {
-    ok: false,
-    message:
-      `Claude Code Router did not become ready on ${router.baseUrl} within 15s.\n` +
-      "Try running `ccr start` in a terminal and check `ccr status`.",
-  };
+  return { ok: false, message: `GLM shim did not come up on ${router.baseUrl}.` };
 }
 
 // Format current date/time for prompt injection
@@ -2169,10 +2145,22 @@ async function main() {
                 taskType: msg.task_type || "",
                 hasOutputFile: !!resolvedOutputFile
               });
-            } else if (msg.subtype === "task_notification" && msg.status === "completed") {
-              // Background agent completed — map SDK agentId back to tool_use_id
+            } else if (
+              (msg.subtype === "task_notification" && msg.status === "completed") ||
+              (msg.subtype === "task_updated" && msg.patch && msg.patch.status === "completed") ||
+              msg.subtype === "task_completed"
+            ) {
+              // Background work completed. Background BASH tasks signal completion via
+              // `task_notification`; background AGENTS signal via
+              // `task_updated{patch.status:"completed"}` (some builds use `task_completed`).
+              // Normalize all shapes so the agent's result is recovered from its output
+              // file and delivered — previously async-AGENT completions emitted nothing,
+              // so the agent's result never surfaced in the conversation/UI.
+              const patch = msg.patch || {};
               const sdkAgentId = normalizeAgentId(msg.task_id);
               const toolUseId = msg.tool_use_id || resolveBgToolUseId(sdkAgentId);
+              // A single task can emit more than one completion shape; process once.
+              const alreadyCompleting = !!(toolUseId && completedBgAgents.has(toolUseId));
               if (sdkAgentId && toolUseId) {
                 rememberBgAgentMapping(sdkAgentId, toolUseId);
               }
@@ -2188,10 +2176,12 @@ async function main() {
                 : (state?.duration || 0);
               const agentType = subagent?.agentType || state?.agentType || "unknown";
               const toolCount = subagent?.nestedToolCount || state?.toolCount || 0;
-              const completionSummary = msg.summary || "";
-              const completionOutputFile = typeof msg.output_file === "string"
-                ? msg.output_file.trim()
-                : "";
+              const completionSummary = msg.summary || patch.summary || "";
+              const completionOutputFile = (
+                typeof msg.output_file === "string" ? msg.output_file
+                  : typeof patch.output_file === "string" ? patch.output_file
+                  : ""
+              ).trim();
 
               if (completionOutputFile) {
                 rememberBgOutputFile(sdkAgentId || state?.taskId || "", toolUseId, completionOutputFile);
@@ -2209,7 +2199,7 @@ async function main() {
               }
 
               const finalizedAlready = isBgResultFinalized(sdkAgentId || state?.taskId || "", toolUseId);
-              if (!finalizedAlready) {
+              if (!finalizedAlready && !alreadyCompleting) {
                 sendEvent("bg_task_completed", {
                   taskId: sdkAgentId || "",
                   toolUseId: toolUseId || undefined,
