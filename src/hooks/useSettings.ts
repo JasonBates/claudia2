@@ -77,6 +77,7 @@ const CURATED_MODELS: ModelOption[] = [
   { label: "Opus 4.8", value: "opus" },
   { label: "Opus 4.7", value: "claude-opus-4-7" },
   { label: "Opus 4.6", value: "claude-opus-4-6" },
+  { label: "Sonnet 5", value: "claude-sonnet-5" },
   { label: "Sonnet 4.6", value: "sonnet" },
   // Non-Claude models proxied through Claude Code Router (ccr must be running).
   // Selecting one opens a new window routed to ccr, flagged with a lime outline.
