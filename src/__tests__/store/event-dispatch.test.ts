@@ -15,13 +15,17 @@ import {
   handleContextUpdate,
   handleResult,
   handleDone,
+  handleInterrupted,
+  createEventDispatcher,
   handleThinkingStart,
   handleThinkingDelta,
   handleTextDelta,
   handleToolStart,
   handleToolInput,
+  handleToolPending,
   handleToolResult,
   handlePermissionRequest,
+  handleAskUserQuestion,
   handleSubagentStart,
   handleSubagentProgress,
   handleSubagentEnd,
@@ -502,6 +506,42 @@ describe("Event Dispatch Functions", () => {
 
     // Note: AskUserQuestion is now handled via control protocol (ask_user_question event)
     // rather than via tool_input JSON collection
+
+    it("should drop input of suppressed tools instead of corrupting the previous tool", () => {
+      const readTool: ToolUse = { id: "read-1", name: "Read", input: { file_path: "/a.ts" } };
+      const ctx = createMockContext({
+        getCurrentToolUses: () => [readTool],
+      });
+
+      // AskUserQuestion tool_start is suppressed (no ADD_TOOL)
+      handleToolStart({ type: "tool_start", id: "q-1", name: "AskUserQuestion" }, ctx);
+      vi.mocked(ctx.dispatch).mockClear();
+
+      // Its streamed input must NOT dispatch UPDATE_LAST_TOOL_INPUT, which
+      // would overwrite the Read tool's input
+      handleToolInput({ type: "tool_input", json: '{"questions":[]}' }, ctx);
+      handleToolPending(ctx);
+      expect(ctx.dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "UPDATE_LAST_TOOL_INPUT" })
+      );
+
+      // Same for ExitPlanMode (its input carries the whole plan text)
+      handleToolStart({ type: "tool_start", id: "exit-1", name: "ExitPlanMode" }, ctx);
+      vi.mocked(ctx.dispatch).mockClear();
+      handleToolInput({ type: "tool_input", json: '{"plan":"# Plan"}' }, ctx);
+      handleToolPending(ctx);
+      expect(ctx.dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "UPDATE_LAST_TOOL_INPUT" })
+      );
+
+      // A following regular tool re-enables input application
+      handleToolStart({ type: "tool_start", id: "bash-1", name: "Bash" }, ctx);
+      vi.mocked(ctx.dispatch).mockClear();
+      handleToolInput({ type: "tool_input", json: '{"command":"ls"}' }, ctx);
+      expect(ctx.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "UPDATE_LAST_TOOL_INPUT" })
+      );
+    });
   });
 
   describe("handleToolResult", () => {
@@ -574,6 +614,37 @@ describe("Event Dispatch Functions", () => {
       expect(ctx.dispatch).not.toHaveBeenCalled();
     });
 
+    it("should only swallow the TodoWrite tool's own result while collecting todos", () => {
+      const bashTool: ToolUse = { id: "bash-1", name: "Bash", input: {} };
+      const ctx = createMockContext({
+        getCurrentToolUses: () => [bashTool],
+      });
+
+      // TodoWrite starts collecting
+      handleToolStart({ type: "tool_start", id: "todo-1", name: "TodoWrite" }, ctx);
+      expect(ctx.refs.isCollectingTodoRef.current).toBe(true);
+
+      // A parallel tool's result arrives mid-collection - must NOT be swallowed
+      handleToolResult(
+        { type: "tool_result", toolUseId: "bash-1", stdout: "bash output", stderr: "", isError: false },
+        ctx
+      );
+      expect(ctx.dispatch).toHaveBeenCalledWith({
+        type: "UPDATE_TOOL",
+        payload: { id: "bash-1", updates: { result: "bash output", isLoading: false } },
+      });
+      expect(ctx.refs.isCollectingTodoRef.current).toBe(true);
+
+      // TodoWrite's own result IS swallowed and ends collection
+      vi.mocked(ctx.dispatch).mockClear();
+      handleToolResult(
+        { type: "tool_result", toolUseId: "todo-1", stdout: "todos updated", stderr: "", isError: false },
+        ctx
+      );
+      expect(ctx.dispatch).not.toHaveBeenCalled();
+      expect(ctx.refs.isCollectingTodoRef.current).toBe(false);
+    });
+
     it("should set plan content when Read tool reads plan file", () => {
       const tool: ToolUse = {
         id: "tool-123",
@@ -598,6 +669,63 @@ describe("Event Dispatch Functions", () => {
         type: "SET_PLAN_CONTENT",
         payload: "# Plan content",
       });
+    });
+  });
+
+  // =========================================================================
+  // Question Handler
+  // =========================================================================
+  describe("handleAskUserQuestion", () => {
+    it("should sanitize malformed question payloads instead of passing them to the panel", () => {
+      const ctx = createMockContext();
+
+      handleAskUserQuestion(
+        {
+          type: "ask_user_question",
+          requestId: "q-req-1",
+          questions: [
+            // Valid question
+            {
+              question: "Pick one",
+              header: "Choice",
+              options: [{ label: "A", description: "first" }, { bogus: true }],
+              multiSelect: false,
+            },
+            // Missing options entirely (would crash QuestionPanel's options.length)
+            { question: "No options here" },
+            // Garbage entries
+            null,
+            "not an object",
+            { options: "not-an-array" },
+          ],
+        },
+        ctx
+      );
+
+      const setQuestions = vi
+        .mocked(ctx.dispatch)
+        .mock.calls.map(([a]) => a)
+        .find((a) => a.type === "SET_QUESTIONS");
+      expect(setQuestions).toBeDefined();
+      const questions = (setQuestions as { type: "SET_QUESTIONS"; payload: unknown[] }).payload;
+      // Every surviving question has a well-formed options array
+      for (const q of questions as Array<{ options: unknown[] }>) {
+        expect(Array.isArray(q.options)).toBe(true);
+      }
+      expect(questions).toHaveLength(2);
+    });
+
+    it("should drop an entirely malformed payload without showing the panel", () => {
+      const ctx = createMockContext();
+
+      handleAskUserQuestion(
+        { type: "ask_user_question", requestId: "q-req-2", questions: [null, 42, {}] },
+        ctx
+      );
+
+      expect(ctx.dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "SET_QUESTION_PANEL_VISIBLE", payload: true })
+      );
     });
   });
 
@@ -1237,6 +1365,35 @@ describe("Event Dispatch Functions", () => {
 
       expect(ctx.dispatch).toHaveBeenCalledWith(
         expect.objectContaining({ type: "FINISH_STREAMING" })
+      );
+    });
+  });
+
+  describe("handleInterrupted", () => {
+    it("should dispatch FINISH_STREAMING with interrupted flag", () => {
+      const ctx = createMockContext();
+
+      handleInterrupted(ctx);
+
+      expect(ctx.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "FINISH_STREAMING",
+          payload: expect.objectContaining({ interrupted: true }),
+        })
+      );
+    });
+
+    it("should be routed by the event dispatcher (regression: missing switch case left isLoading stuck)", () => {
+      const ctx = createMockContext();
+      const dispatcher = createEventDispatcher(ctx);
+
+      dispatcher({ type: "interrupted" });
+
+      expect(ctx.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "FINISH_STREAMING",
+          payload: expect.objectContaining({ interrupted: true }),
+        })
       );
     });
   });

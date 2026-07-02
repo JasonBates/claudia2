@@ -180,17 +180,23 @@ export function createBackgroundResponseHandler(
 
       case "tool_result": {
         const toolId = event.toolUseId || currentToolId;
-        if (toolId) {
-          const result = event.isError
-            ? `Error: ${event.stderr || event.stdout}`
-            : event.stdout || event.stderr || "";
-          updateTool(toolId, {
-            result,
-            isLoading: false,
-            completedAt: Date.now(),
-          });
-          publishMessage();
+        // Only consume results for tools this background message owns.
+        // A late main-turn result (e.g. a slow tool outliving the idle
+        // timeout, routed here via the background pump) must fall through
+        // to the main dispatcher, whose finalized-message fallback clears
+        // the spinner on the transcript's tool card.
+        if (!toolId || !toolIndexById.has(toolId)) {
+          return false;
         }
+        const result = event.isError
+          ? `Error: ${event.stderr || event.stdout}`
+          : event.stdout || event.stderr || "";
+        updateTool(toolId, {
+          result,
+          isLoading: false,
+          completedAt: Date.now(),
+        });
+        publishMessage();
         return true;
       }
 

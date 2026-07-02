@@ -912,6 +912,10 @@ function App() {
     store.refs.bgFinalizedTaskIdsRef?.current.clear();
     store.refs.bgFinalizedTaskOrderRef?.current.splice(0);
     backgroundResponse.reset();
+    // Pending permission/question requests belong to the previous session's
+    // process - clear them so no zombie dialog carries over.
+    store.dispatch(actions.clearPermissionQueue());
+    store.dispatch(actions.clearQuestionPanel());
     store.dispatch(actions.setSessionError(null));
   };
 
@@ -1088,8 +1092,11 @@ function App() {
         // Send as JSON-prefixed message for SDK bridge
         messageToSend = `__JSON__${JSON.stringify({ content: contentBlocks })}`;
       } else {
-        // Plain text message (existing behavior)
-        messageToSend = currentMode() === "plan"
+        // Plain text message (existing behavior).
+        // Slash commands (/compact, /model, ...) must reach the CLI verbatim -
+        // the plan-mode prefix would turn them into ordinary prose.
+        const isSlashCommand = text.trimStart().startsWith("/");
+        messageToSend = currentMode() === "plan" && !isSlashCommand
           ? `[PLAN MODE: Analyze and explain your approach, but do not modify any files or run any commands. Show me what you would do without actually doing it.]\n\n${text}`
           : text;
       }
@@ -1713,13 +1720,15 @@ function App() {
 
       {/* Question Panel Overlay */}
       <Show when={store.showQuestionPanel() && store.pendingQuestions().length > 0}>
-        <div class="question-overlay">
-          <QuestionPanel
-            questions={store.pendingQuestions()}
-            onAnswer={handleQuestionAnswer}
-            onCancel={handleQuestionCancel}
-          />
-        </div>
+        <ErrorBoundary fallback={(err, reset) => <ErrorFallback error={err} reset={reset} section="the question panel" />}>
+          <div class="question-overlay">
+            <QuestionPanel
+              questions={store.pendingQuestions()}
+              onAnswer={handleQuestionAnswer}
+              onCancel={handleQuestionCancel}
+            />
+          </div>
+        </ErrorBoundary>
       </Show>
 
       {/* Plan approval is now inline in PlanningTool component */}

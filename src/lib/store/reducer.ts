@@ -186,6 +186,15 @@ export function conversationReducer(
         tools: {
           current: [],
         },
+        // An interrupt kills the CLI process, invalidating every pending
+        // permission/question requestId. Clear them so no zombie dialog is
+        // left pointing at a request the respawned process doesn't know.
+        ...(action.payload?.interrupted
+          ? {
+              permission: { queue: [] },
+              question: { pending: [], showPanel: false, requestId: null } as ConversationState["question"],
+            }
+          : {}),
       };
     }
 

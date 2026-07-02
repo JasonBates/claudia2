@@ -2308,7 +2308,10 @@ async function main() {
                     } else if (block.name === "Write" && input.file_path) {
                       toolDetail = input.file_path.split("/").pop();
                     } else if (block.name === "WebFetch" && input.url) {
-                      toolDetail = new URL(input.url).hostname;
+                      // input.url is model-generated and can be malformed
+                      // (relative path, garbage) - a throw here would abort
+                      // processing of the remaining blocks in this message
+                      try { toolDetail = new URL(input.url).hostname; } catch { toolDetail = String(input.url).slice(0, 40); }
                     } else if (block.name === "WebSearch" && input.query) {
                       toolDetail = `"${input.query.slice(0, 40)}"`;
                     }
@@ -2638,19 +2641,32 @@ async function main() {
       }
     });
 
-    // Handle stderr - only send error events for actual fatal errors
+    // Handle stderr - only send error events for actual fatal errors.
+    // stderr `data` chunks are NOT lines: an "Error: ..." message split
+    // across two chunks would never match a startsWith check. Accumulate
+    // into a buffer and test complete lines only.
+    let stderrBuffer = "";
+    const isFatalStderrLine = (line) =>
+      line.startsWith("Error:") ||
+      line.startsWith("FATAL") ||
+      line.includes("panic") ||
+      line.includes("UnhandledPromiseRejection") ||
+      /^error:/i.test(line);
     claude.stderr.on("data", (data) => {
       const str = data.toString();
       debugLog("CLAUDE_STDERR", str.slice(0, 500));
-      const trimmed = str.trim();
-      if (
-        trimmed.startsWith("Error:") ||
-        trimmed.startsWith("FATAL") ||
-        str.includes("panic") ||
-        str.includes("UnhandledPromiseRejection") ||
-        /^error:/im.test(trimmed)
-      ) {
-        sendEvent("error", { message: str.slice(0, 500) });
+      stderrBuffer += str;
+      // Cap the carry-over so a stream with no newlines can't grow unbounded
+      if (stderrBuffer.length > 8192) {
+        stderrBuffer = stderrBuffer.slice(-8192);
+      }
+      const lines = stderrBuffer.split("\n");
+      stderrBuffer = lines.pop() ?? "";  // Keep the trailing partial line
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed && isFatalStderrLine(trimmed)) {
+          sendEvent("error", { message: trimmed.slice(0, 500) });
+        }
       }
     });
 
@@ -2695,6 +2711,16 @@ async function main() {
         }
 
         debugLog("RESPAWN", `Claude exited unexpectedly (code ${code}), respawning (${respawnCount}/5)...`);
+
+        // Surface the failure. Without these events a crash mid-response
+        // strands the UI: partial text with a spinner that never resolves,
+        // and the in-flight turn silently lost. `interrupted` finalizes the
+        // partial message and unblocks the Rust receive loop (which treats
+        // it as a turn terminator); `error` explains what happened.
+        sendEvent("interrupted", {});
+        sendEvent("error", {
+          message: `Claude exited unexpectedly (code ${code}). Restarting the session - the interrupted response was lost.`
+        });
       }
 
       setImmediate(() => {
@@ -2771,6 +2797,14 @@ async function main() {
     debugLog("CLAUDE_STDIN", msg);
     if (claude && claude.stdin.writable) {
       claude.stdin.write(msg);
+    } else {
+      // The CLI died (crash/respawn) while a dialog was open. The response
+      // targets a request_id the new process doesn't know, so delivering it
+      // later is pointless - tell the user instead of silently dropping it.
+      debugLog("CONTROL_RESPONSE_DROPPED", { type: parsed.type, requestId: parsed.request_id });
+      sendEvent("error", {
+        message: "Claude restarted while a permission/question dialog was open - the response could not be delivered. Please retry the action."
+      });
     }
     return true;
   }

@@ -64,8 +64,12 @@ export interface StreamingRefs {
   questionJsonRef: { current: string };
   /** Flag indicating TodoWrite collection is active */
   isCollectingTodoRef: { current: boolean };
+  /** Tool-use ID of the TodoWrite currently being collected (scopes result swallowing) */
+  todoToolIdRef: { current: string | null };
   /** Flag indicating AskUserQuestion collection is active */
   isCollectingQuestionRef: { current: boolean };
+  /** True while the current streaming tool is suppressed from display (AskUserQuestion/ExitPlanMode) - its input deltas must not touch visible tools */
+  suppressToolInputRef: { current: boolean };
   /** Pending tool results for race condition handling (result before tool_start) */
   pendingResultsRef: { current: Map<string, { result: string; isError: boolean }> };
   /** Index of current tool block in streaming.blocks for O(1) updates */
