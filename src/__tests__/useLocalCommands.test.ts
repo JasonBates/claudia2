@@ -604,6 +604,26 @@ describe("useLocalCommands", () => {
 
       expect(mockQuitApp).toHaveBeenCalled();
     });
+
+    it("should NOT quit when quit aliases have arguments (they are prompts, not commands)", async () => {
+      const hook = createHook();
+
+      // Regression: "/exit plan mode and implement it" used to quit the app
+      expect(await hook.dispatch("/exit plan mode and implement it")).toBe(false);
+      expect(await hook.dispatch("/quit asking me questions")).toBe(false);
+      expect(await hook.dispatch("/q what does this do")).toBe(false);
+      expect(await hook.dispatch("/x marks the spot")).toBe(false);
+
+      expect(mockQuitApp).not.toHaveBeenCalled();
+    });
+
+    it("should NOT clear when /clear has arguments", async () => {
+      const hook = createHook();
+
+      expect(await hook.dispatch("/clear the table in schema.sql")).toBe(false);
+
+      expect(mockClearSession).not.toHaveBeenCalled();
+    });
   });
 
   // ============================================================================

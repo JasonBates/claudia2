@@ -250,46 +250,60 @@ def main() -> int:
     final_text: str | None = None
     final_session_id: str | None = None
     error_message: str | None = None
+    timed_out = False
     deadline = time.monotonic() + args.response_timeout
 
-    with conn.makefile("rb") as r:
-        for line in r:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                error_message = f"response timeout after {args.response_timeout}s"
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except json.JSONDecodeError:
-                # Malformed line — surface in --raw mode, otherwise skip.
+    try:
+        with conn.makefile("rb") as r:
+            for line in r:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    # Malformed line — surface in --raw mode, otherwise skip.
+                    if args.raw:
+                        sys.stdout.buffer.write(line + b"\n")
+                        sys.stdout.flush()
+                    continue
+
                 if args.raw:
-                    sys.stdout.buffer.write(line + b"\n")
+                    sys.stdout.write(json.dumps(ev) + "\n")
                     sys.stdout.flush()
-                continue
 
-            if args.raw:
-                sys.stdout.write(json.dumps(ev) + "\n")
-                sys.stdout.flush()
-
-            t = ev.get("type")
-            if t == "started":
-                continue
-            if t == "done":
-                final_text = ev.get("text", "")
-                final_session_id = ev.get("session_id")
-                break
-            if t == "error":
-                error_message = ev.get("message", "unknown error")
-                break
+                t = ev.get("type")
+                if t == "started":
+                    continue
+                if t == "done":
+                    final_text = ev.get("text", "")
+                    final_session_id = ev.get("session_id")
+                    break
+                if t == "error":
+                    error_message = ev.get("message", "unknown error")
+                    break
+    except TimeoutError:
+        # conn.settimeout() fired during a blocking recv — no data at all
+        # within the window. Documented as exit code 3, same as the internal
+        # deadline; without this handler it was a traceback and exit 1.
+        timed_out = True
 
     if args.session_out and final_session_id:
         try:
             Path(args.session_out).write_text(final_session_id)
         except OSError as e:
             print(f"claudia-prompt: failed to write --session-out: {e}", file=sys.stderr)
+
+    if timed_out:
+        print(
+            f"claudia-prompt: timed out waiting for a response ({args.response_timeout}s)",
+            file=sys.stderr,
+        )
+        return 3
 
     if error_message:
         print(f"claudia-prompt: {error_message}", file=sys.stderr)

@@ -43,6 +43,7 @@ export interface Command {
   description: string;    // For /help listing
   handler: () => Promise<void>;
   keybinding?: string;    // e.g., "cmd+k", "alt+t", "shift+enter"
+  requiresBare?: boolean; // Only match when typed with no arguments ("/exit" but not "/exit plan mode...") - for destructive commands
 }
 
 export interface UseLocalCommandsOptions {
@@ -730,6 +731,7 @@ export function useLocalCommands(options: UseLocalCommandsOptions): UseLocalComm
       name: "clear",
       description: "Clear conversation history",
       handler: handleClear,
+      requiresBare: true,
     },
     {
       name: "thinking",
@@ -753,21 +755,25 @@ export function useLocalCommands(options: UseLocalCommandsOptions): UseLocalComm
       description: "Close the application",
       keybinding: "alt+q",
       handler: handleQuit,
+      requiresBare: true,
     },
     {
       name: "quit",
       description: "Close the application",
       handler: handleQuit,
+      requiresBare: true,
     },
     {
       name: "x",
       description: "Close the application",
       handler: handleQuit,
+      requiresBare: true,
     },
     {
       name: "q",
       description: "Close the application",
       handler: handleQuit,
+      requiresBare: true,
     },
     {
       name: "settings",
@@ -863,6 +869,14 @@ export function useLocalCommands(options: UseLocalCommandsOptions): UseLocalComm
 
     const command = commands.find((c) => c.name === commandName);
     if (!command) return false;
+
+    // Destructive commands (quit aliases, clear) only fire when typed bare.
+    // "/exit plan mode and implement it" is a prompt for Claude, not a quit.
+    const args = trimmed.slice(1 + commandName.length).trim();
+    if (command.requiresBare && args) {
+      console.log(`[COMMANDS] /${command.name} has arguments - passing through to Claude`);
+      return false;
+    }
 
     console.log(`[COMMANDS] Dispatching /${command.name}`);
     try {

@@ -314,6 +314,12 @@ pub async fn send_message(
             *handle_guard = Some(new_handle);
         }
 
+        // A fresh bridge process cannot be mid-autonomous-turn. Clear the flag
+        // so a stale AutoTurnStart from the crashed process (whose AutoTurnEnd
+        // never arrived) doesn't route this turn's response to the background
+        // path, leaving the user's prompt visibly unanswered.
+        state.auto_turn_active.store(false, Ordering::SeqCst);
+
         // Wait for Ready event before sending message (bridge has warmup sequence)
         cmd_debug_log("RESTART", "Waiting for bridge to be ready...");
         let mut ready_received = false;
@@ -388,6 +394,7 @@ pub async fn send_message(
     let mut compacting = false; // Track if compaction is in progress (can take 60+ seconds)
     let mut thinking_in_progress = false; // Track if extended thinking is active (needs longer timeout)
     let mut post_tool_waiting = false; // Track post-tool API processing phase (45s window)
+    let mut superseded = false; // A newer send_message took over the receiver
 
     cmd_debug_log("LOOP", "Starting event receive loop");
 
@@ -405,6 +412,7 @@ pub async fn send_message(
             // Notify frontend that this request was cancelled by a newer one
             // This prevents the UI from hanging waiting for a response that won't come
             let _ = channel.send(ClaudeEvent::Interrupted);
+            superseded = true;
             break;
         }
 
@@ -870,6 +878,18 @@ pub async fn send_message(
 
     // Spawn background pump for late-arriving events
     // (e.g., background tasks completing after Done)
+    //
+    // NOT when superseded: the newer request's loop owns the receiver now.
+    // Spawning here would create a second consumer that competes with it for
+    // events, and storing our handle below would orphan whatever pump the
+    // newer request later replaces - a detached task stealing events forever.
+    if superseded {
+        cmd_debug_log(
+            "PUMP",
+            "Skipping pump spawn - superseded; the newer request owns the receiver",
+        );
+        return Ok(());
+    }
     {
         let pump_receiver = state.receiver.clone();
         let pump_app = app.clone();
@@ -940,7 +960,12 @@ pub async fn send_message(
         });
 
         let mut pump = state.bg_pump_handle.lock().await;
-        *pump = Some(handle);
+        if let Some(old) = pump.replace(handle) {
+            // Never drop a live pump handle - a dropped tokio JoinHandle
+            // detaches the task (it keeps running unabortable) instead of
+            // cancelling it.
+            old.abort();
+        }
         cmd_debug_log("PUMP", "Background event pump spawned");
     }
 

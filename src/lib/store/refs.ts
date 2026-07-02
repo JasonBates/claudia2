@@ -21,7 +21,9 @@ export function createStreamingRefs(): StreamingRefs {
     todoJsonRef: { current: "" },
     questionJsonRef: { current: "" },
     isCollectingTodoRef: { current: false },
+    todoToolIdRef: { current: null },
     isCollectingQuestionRef: { current: false },
+    suppressToolInputRef: { current: false },
     pendingResultsRef: { current: new Map() },
     lastToolBlockIndexRef: { current: null },
     toolIdToBlockIndexRef: { current: new Map() },
@@ -45,7 +47,9 @@ export function resetStreamingRefs(refs: StreamingRefs): void {
   refs.todoJsonRef.current = "";
   refs.questionJsonRef.current = "";
   refs.isCollectingTodoRef.current = false;
+  refs.todoToolIdRef.current = null;
   refs.isCollectingQuestionRef.current = false;
+  refs.suppressToolInputRef.current = false;
   refs.pendingResultsRef.current.clear();
   refs.lastToolBlockIndexRef.current = null;
   refs.toolIdToBlockIndexRef.current.clear();

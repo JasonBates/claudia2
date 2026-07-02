@@ -106,6 +106,50 @@ describe("background response handler", () => {
     });
   });
 
+  it("does not consume tool results for tools it doesn't own (late main-turn results)", () => {
+    const { handler } = createHarness();
+
+    // A main-turn tool's result routed via the background pump: the handler
+    // never saw its tool_start, so it must fall through to the main
+    // dispatcher's finalized-message recovery instead of being swallowed.
+    expect(
+      handler.handle({
+        type: "tool_result",
+        toolUseId: "main-turn-tool-1",
+        stdout: "late result",
+        stderr: "",
+        isError: false,
+      })
+    ).toBe(false);
+
+    // With no toolUseId and no current background tool, there is nothing to
+    // attribute the result to - also fall through.
+    expect(
+      handler.handle({
+        type: "tool_result",
+        toolUseId: "",
+        stdout: "orphan",
+        stderr: "",
+        isError: false,
+      })
+    ).toBe(false);
+  });
+
+  it("still consumes tool results for tools it owns", () => {
+    const { handler } = createHarness();
+
+    handler.handle({ type: "tool_start", id: "bg-tool-1", name: "Bash" });
+    expect(
+      handler.handle({
+        type: "tool_result",
+        toolUseId: "bg-tool-1",
+        stdout: "ok",
+        stderr: "",
+        isError: false,
+      })
+    ).toBe(true);
+  });
+
   it("does not consume background task lifecycle events", () => {
     const { actions, handler } = createHarness();
 

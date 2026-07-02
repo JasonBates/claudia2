@@ -191,6 +191,10 @@ export function handleClosed(event: NormalizedClosedEvent, ctx: EventContext): v
     type: "SET_SESSION_ERROR",
     payload: `Session closed (code ${event.code})`,
   });
+  // The process is gone - pending permission/question requestIds are dead.
+  // Clear them so no zombie dialog blocks the restarted session.
+  ctx.dispatch({ type: "CLEAR_PERMISSION_QUEUE" });
+  ctx.dispatch({ type: "CLEAR_QUESTION_PANEL" });
 }
 
 /**
@@ -266,6 +270,20 @@ export function handleDone(ctx: EventContext): void {
   });
 }
 
+/**
+ * Handle interrupted events (turn cancelled by user or superseded by a newer
+ * request). Rust sends this specifically so the UI doesn't hang waiting for a
+ * response that won't come - finalize any partial content and stop loading.
+ * FINISH_STREAMING on empty streaming state creates no message, so a
+ * duplicate arriving after the Escape-key path already finalized is a no-op.
+ */
+export function handleInterrupted(ctx: EventContext): void {
+  ctx.dispatch({
+    type: "FINISH_STREAMING",
+    payload: { generateId: ctx.generateMessageId, interrupted: true },
+  });
+}
+
 // =============================================================================
 // Text & Thinking Handlers
 // =============================================================================
@@ -315,9 +333,11 @@ export function handleTextDelta(event: NormalizedTextDeltaEvent, ctx: EventConte
  */
 export function handleToolStart(event: NormalizedToolStartEvent, ctx: EventContext): void {
   ctx.refs.toolInputRef.current = "";
+  ctx.refs.suppressToolInputRef.current = false;
 
   if (event.name === "TodoWrite") {
     ctx.refs.isCollectingTodoRef.current = true;
+    ctx.refs.todoToolIdRef.current = event.id || null;
     ctx.refs.todoJsonRef.current = "";
     ctx.dispatch({ type: "SET_TODO_PANEL_VISIBLE", payload: true });
     ctx.dispatch({ type: "SET_TODO_PANEL_HIDING", payload: false });
@@ -325,8 +345,10 @@ export function handleToolStart(event: NormalizedToolStartEvent, ctx: EventConte
   }
 
   // AskUserQuestion is now handled via control protocol (ask_user_question event)
-  // We still need to suppress it from showing as a regular tool
+  // We still need to suppress it from showing as a regular tool - and drop its
+  // streamed input, which would otherwise land on the previous visible tool
   if (event.name === "AskUserQuestion") {
+    ctx.refs.suppressToolInputRef.current = true;
     return;
   }
 
@@ -347,8 +369,11 @@ export function handleToolStart(event: NormalizedToolStartEvent, ctx: EventConte
 
   if (event.name === "ExitPlanMode") {
     // ExitPlanMode is handled via permission_request event where we get the requestId
-    // Just return early to avoid adding it as a tool block
+    // Just return early to avoid adding it as a tool block - and drop its
+    // streamed input (the plan text), which would otherwise land on the
+    // previous visible tool
     console.log("[PLANNING] ExitPlanMode tool_start - waiting for permission_request");
+    ctx.refs.suppressToolInputRef.current = true;
     return;
   }
 
@@ -402,7 +427,12 @@ export function handleToolInput(event: NormalizedToolInputEvent, ctx: EventConte
     return;
   }
 
-  // AskUserQuestion is now handled via control protocol - no need to collect JSON here
+  // Input of suppressed tools (AskUserQuestion/ExitPlanMode) must not be
+  // applied - UPDATE_LAST_TOOL_INPUT would overwrite the previous visible
+  // tool's input, since suppressed tools are never added to the list
+  if (ctx.refs.suppressToolInputRef.current) {
+    return;
+  }
 
   // Regular tool input
   ctx.refs.toolInputRef.current += json;
@@ -441,7 +471,11 @@ export function handleToolPending(ctx: EventContext): void {
     return;
   }
 
-  // AskUserQuestion is now handled via control protocol
+  // Suppressed tools (AskUserQuestion/ExitPlanMode) have no visible tool to
+  // finalize - skip so the previous tool's input isn't overwritten
+  if (ctx.refs.suppressToolInputRef.current) {
+    return;
+  }
 
   // Finalize tool input
   const currentTools = ctx.getCurrentToolUses();
@@ -456,8 +490,15 @@ export function handleToolPending(ctx: EventContext): void {
  */
 export function handleToolResult(event: NormalizedToolResultEvent, ctx: EventContext): void {
   if (ctx.refs.isCollectingTodoRef.current) {
-    ctx.refs.isCollectingTodoRef.current = false;
-    return;
+    // Only swallow the TodoWrite tool's own result (the todo list is rendered
+    // by the panel, not a tool card). A parallel tool's result arriving while
+    // TodoWrite input is being collected must be processed normally.
+    const todoToolId = ctx.refs.todoToolIdRef.current;
+    if (!event.toolUseId || !todoToolId || event.toolUseId === todoToolId) {
+      ctx.refs.isCollectingTodoRef.current = false;
+      ctx.refs.todoToolIdRef.current = null;
+      return;
+    }
   }
 
   // AskUserQuestion is now handled via control protocol
@@ -691,12 +732,37 @@ export function handleAskUserQuestion(
 
   console.log("[ASK_USER_QUESTION] Received via control protocol:", requestId);
 
+  // The payload is untrusted CLI JSON - coerce it to the Question shape the
+  // panel renders (it dereferences question.options.length unguarded).
+  // Malformed entries are dropped rather than crashing the component tree.
+  const sanitized: Question[] = (Array.isArray(questions) ? (questions as unknown[]) : [])
+    .filter((q): q is Record<string, unknown> => !!q && typeof q === "object")
+    .map((q) => ({
+      question: typeof q.question === "string" ? q.question : "",
+      header: typeof q.header === "string" ? q.header : "",
+      options: (Array.isArray(q.options) ? (q.options as unknown[]) : [])
+        .filter((o): o is Record<string, unknown> => !!o && typeof o === "object")
+        .map((o) => ({
+          label: typeof o.label === "string" ? o.label : "",
+          description: typeof o.description === "string" ? o.description : "",
+        })),
+      multiSelect: q.multiSelect === true,
+    }))
+    .filter((q) => q.question !== "" || q.options.length > 0);
+
+  if (sanitized.length === 0) {
+    console.error(
+      "[ASK_USER_QUESTION] Dropping malformed questions payload for request:",
+      requestId
+    );
+    return;
+  }
+
   // Store the request ID so we can respond later
   ctx.dispatch({ type: "SET_PENDING_QUESTION_REQUEST_ID", payload: requestId });
 
   // Set questions and show the panel
-  // Cast to Question[] since the control protocol provides the same structure
-  ctx.dispatch({ type: "SET_QUESTIONS", payload: questions as Question[] });
+  ctx.dispatch({ type: "SET_QUESTIONS", payload: sanitized });
   ctx.dispatch({ type: "SET_QUESTION_PANEL_VISIBLE", payload: true });
 }
 
@@ -1141,6 +1207,9 @@ export function createEventDispatcher(ctx: EventContext) {
           break;
         case "done":
           handleDone(ctx);
+          break;
+        case "interrupted":
+          handleInterrupted(ctx);
           break;
         case "closed":
           handleClosed(event, ctx);

@@ -337,6 +337,77 @@ describe("conversationReducer", () => {
       expect(newState.messages[0].interrupted).toBe(true);
     });
 
+    it("FINISH_STREAMING with interrupted should clear pending permission and question requests", () => {
+      const initial = createInitialState();
+      const state = {
+        ...initial,
+        streaming: { ...initial.streaming, content: "partial", isLoading: true },
+        permission: {
+          queue: [
+            {
+              request: {
+                requestId: "req-1",
+                toolName: "Bash",
+                toolInput: { command: "ls" },
+                description: "",
+                source: "control" as const,
+              },
+              isReviewing: false,
+              reviewResult: null,
+            },
+          ],
+        },
+        question: {
+          pending: [
+            { question: "Pick one", header: "Choice", options: [], multiSelect: false },
+          ],
+          showPanel: true,
+          requestId: "q-req-1",
+        },
+      };
+
+      const newState = conversationReducer(state, {
+        type: "FINISH_STREAMING",
+        payload: { interrupted: true, generateId: () => "msg-1" },
+      });
+
+      // The interrupt killed the CLI process; those requestIds are dead
+      expect(newState.permission.queue).toEqual([]);
+      expect(newState.question.pending).toEqual([]);
+      expect(newState.question.showPanel).toBe(false);
+      expect(newState.question.requestId).toBeNull();
+    });
+
+    it("FINISH_STREAMING without interrupted should preserve pending permission requests", () => {
+      const initial = createInitialState();
+      const state = {
+        ...initial,
+        streaming: { ...initial.streaming, content: "done", isLoading: true },
+        permission: {
+          queue: [
+            {
+              request: {
+                requestId: "req-1",
+                toolName: "Bash",
+                toolInput: { command: "ls" },
+                description: "",
+                source: "control" as const,
+              },
+              isReviewing: false,
+              reviewResult: null,
+            },
+          ],
+        },
+      };
+
+      const newState = conversationReducer(state, {
+        type: "FINISH_STREAMING",
+        payload: { generateId: () => "msg-1" },
+      });
+
+      expect(newState.permission.queue).toHaveLength(1);
+    });
+
     it("FINISH_STREAMING should not add message if no content", () => {
       const state = {
         ...createInitialState(),
