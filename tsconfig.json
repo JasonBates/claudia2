@@ -22,5 +22,12 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src"],
+  /*
+   * src/__tests__/node holds Node-side integration harnesses (e.g. spawning the
+   * SDK bridge). They need Node globals this config deliberately omits — the
+   * frontend runs in a webview and shouldn't typecheck against `process`, `fs`,
+   * etc. Vitest still runs them; they're just outside the DOM-only check.
+   */
+  "exclude": ["src/__tests__/node"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
