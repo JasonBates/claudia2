@@ -260,7 +260,10 @@ async function main() {
   let respawnWindowStart = Date.now();
   let isWarmingUp = false;   // Suppress events during warmup
   let userInputSeen = false; // True once any user message has been forwarded — used to skip warmup if the user beat the 100ms timer
-  let extended1mEnabled = false; // Track 1M context window toggle (via /1m command)
+  // Track 1M context window toggle (via /1m command). Seeded from CLAUDIA_MODEL so
+  // a session launched directly on a "[1m]" model starts in the correct state —
+  // otherwise the first /1m would toggle "on" a window that was already on.
+  let extended1mEnabled = /\[1m\]$/i.test((process.env.CLAUDIA_MODEL || "").trim());
   let currentToolId = null;  // Track current tool ID for tool_result matching
   let currentToolName = null; // Track current tool name for subagent detection
 
@@ -329,14 +332,29 @@ async function main() {
     "*.ghcr.io",
   ];
 
+  // The model this session is actually running.
+  //
+  // Single source of truth for both the CLI's --model flag and the "model" field
+  // on ready events. The frontend derives its context limit and cost estimate
+  // from the ready event, so any divergence here shows up as a wrong context
+  // gauge or wrong spend figure.
+  //
+  // For router (ccr) models we send the upstream provider model id; otherwise the
+  // CLAUDIA_MODEL slug is a native Claude alias passed straight through. The
+  // "[1m]" suffix is stripped and re-applied from extended1mEnabled so the
+  // extended context window survives a respawn or /clear.
+  function getActiveModel() {
+    const router = getRouterConfig();
+    // Router models are proxied to a third-party provider that has no "[1m]"
+    // variant, so the suffix must never be appended to an upstream id.
+    if (router) return router.upstreamModel;
+    const base = (process.env.CLAUDIA_MODEL || "").trim().replace(/\[1m\]$/i, "") || "opus";
+    return extended1mEnabled ? `${base}[1m]` : base;
+  }
+
   // Build Claude args - optionally resume a session
   function buildClaudeArgs(resumeSessionId = null) {
-    // For router (ccr) models, send the upstream provider model id; otherwise the
-    // CLAUDIA_MODEL slug is a native Claude alias passed straight through.
-    const router = getRouterConfig();
-    const model = router
-      ? router.upstreamModel
-      : (process.env.CLAUDIA_MODEL || "").trim() || "opus";
+    const model = getActiveModel();
     const settings = { alwaysThinkingEnabled: true };
 
     // Enable SDK sandbox when CLAUDIA_SANDBOX is set
@@ -2090,7 +2108,9 @@ async function main() {
                 debugLog("SESSION_ID_FROM_HOOK", currentSessionId);
                 sendEvent("ready", {
                   sessionId: msg.session_id,
-                  model: "opus",  // Model info not available in hook response
+                  // The hook response carries no model info, so report the model we
+                  // actually launched the CLI with rather than a hardcoded guess.
+                  model: getActiveModel(),
                   tools: 0        // Tool count not available in hook response
                 });
                 readySent = true;
@@ -2812,11 +2832,10 @@ async function main() {
   // Toggle or set the extended 1M context window by switching model via CLI.
   // arg: "on" | "off" | undefined (toggle)
   function handle1mToggle(arg) {
-    const baseModel = (process.env.CLAUDIA_MODEL || "").trim().replace(/\[1m\]$/i, "") || "opus";
     if (arg === "on") extended1mEnabled = true;
     else if (arg === "off") extended1mEnabled = false;
     else extended1mEnabled = !extended1mEnabled;
-    const newModel = extended1mEnabled ? `${baseModel}[1m]` : baseModel;
+    const newModel = getActiveModel();
     const newLimit = extended1mEnabled ? "1M" : "200K";
     debugLog("1M_TOGGLE", { model: newModel, enabled: extended1mEnabled });
     const modelMsg = JSON.stringify({
@@ -3141,7 +3160,9 @@ async function main() {
           sendEvent("status", { message: "Context cleared" });
           sendEvent("ready", {
             sessionId: currentSessionId,
-            model: "opus",
+            // /clear keeps the same CLI process and model — don't reset the
+            // frontend's context limit and cost basis to the default model.
+            model: getActiveModel(),
             tools: 0  // Will be updated on next message
           });
           readySent = true;  // Mark ready as sent for the new session
