@@ -134,6 +134,8 @@ describe('context-utils', () => {
     it('prices modern Opus (4.5+ and bare alias) at $5/$25 per MTok', () => {
       for (const model of [
         'opus',
+        'claude-opus-5',
+        'claude-opus-5[1m]',
         'claude-opus-4-8',
         'claude-opus-4-7',
         'claude-opus-4-6[1m]',
