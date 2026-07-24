@@ -2836,7 +2836,12 @@ async function main() {
     else if (arg === "off") extended1mEnabled = false;
     else extended1mEnabled = !extended1mEnabled;
     const newModel = getActiveModel();
-    const newLimit = extended1mEnabled ? "1M" : "200K";
+    // These labels are what the user reads; the gauge next to them is computed
+    // independently by the frontend from CONTEXT_LIMIT_1M / CONTEXT_LIMIT_DEFAULT
+    // (src/lib/context-utils.ts). The bridge can't import that module — it's
+    // frontend TypeScript — so the two are kept in sync by test instead. If you
+    // change a limit there, bridge-ready-model.test.ts will fail and point here.
+    const newLimit = extended1mEnabled ? "1M" : "250K";
     debugLog("1M_TOGGLE", { model: newModel, enabled: extended1mEnabled });
     const modelMsg = JSON.stringify({
       type: "user",

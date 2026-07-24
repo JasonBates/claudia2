@@ -17,8 +17,20 @@ import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import * as readline from 'readline';
+import { CONTEXT_LIMIT_1M, CONTEXT_LIMIT_DEFAULT } from '../../lib/context-utils';
 
 const BRIDGE_PATH = resolve(process.cwd(), 'sdk-bridge-v2.mjs');
+
+/**
+ * How the bridge labels a context limit in its status line. Derived from the
+ * frontend constants on purpose: the bridge hardcodes these strings (it can't
+ * import frontend TypeScript), so this is what keeps the two honest. Change a
+ * limit in context-utils.ts and the assertions below fail, pointing at the
+ * matching literal in handle1mToggle.
+ */
+function limitLabel(limit: number): string {
+  return limit >= 1_000_000 ? `${limit / 1_000_000}M` : `${limit / 1_000}K`;
+}
 const STUB_SESSION_ID = '11111111-2222-3333-4444-555555555555';
 
 /**
@@ -39,17 +51,27 @@ process.stdout.write(JSON.stringify({
 setInterval(() => {}, 1 << 30);
 `;
 
-interface ReadyEvent {
+interface BridgeEvent {
   type: string;
   sessionId?: string;
   model?: string;
+  message?: string;
 }
 
 class BridgeHarness {
   proc: ChildProcess;
-  readyEvents: ReadyEvent[] = [];
+  events: BridgeEvent[] = [];
   private tmpDir: string;
-  private waiters: Array<{ count: number; resolve: () => void }> = [];
+  private waiters: Array<{ type: string; count: number; resolve: () => void }> = [];
+
+  private of(type: string): BridgeEvent[] {
+    return this.events.filter((e) => e.type === type);
+  }
+
+  /** How many events of `type` have arrived so far. */
+  count(type: string): number {
+    return this.of(type).length;
+  }
 
   constructor(claudiaModel: string) {
     this.tmpDir = mkdtempSync(join(tmpdir(), 'claudia-bridge-test-'));
@@ -68,16 +90,15 @@ class BridgeHarness {
     });
 
     readline.createInterface({ input: this.proc.stdout! }).on('line', (line) => {
-      let event: ReadyEvent;
+      let event: BridgeEvent;
       try {
         event = JSON.parse(line);
       } catch {
         return; // non-JSON noise
       }
-      if (event.type !== 'ready') return;
-      this.readyEvents.push(event);
+      this.events.push(event);
       for (const w of [...this.waiters]) {
-        if (this.readyEvents.length >= w.count) {
+        if (this.of(w.type).length >= w.count) {
           this.waiters.splice(this.waiters.indexOf(w), 1);
           w.resolve();
         }
@@ -89,28 +110,34 @@ class BridgeHarness {
     this.proc.stdin!.write(line + '\n');
   }
 
-  /** Resolve once at least `count` ready events have arrived. */
-  waitForReady(count: number, timeoutMs = 10_000): Promise<ReadyEvent> {
-    if (this.readyEvents.length >= count) {
-      return Promise.resolve(this.readyEvents[count - 1]);
+  /** Resolve once at least `count` events of `type` have arrived, with the last one. */
+  waitFor(type: string, count: number, timeoutMs = 10_000): Promise<BridgeEvent> {
+    const seen = () => this.of(type);
+    if (seen().length >= count) {
+      return Promise.resolve(seen()[count - 1]);
     }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(
           new Error(
-            `Timed out waiting for ready #${count}; saw ${this.readyEvents.length}: ` +
-              JSON.stringify(this.readyEvents)
+            `Timed out waiting for ${type} #${count}; saw ${seen().length}: ` +
+              JSON.stringify(this.events)
           )
         );
       }, timeoutMs);
       this.waiters.push({
+        type,
         count,
         resolve: () => {
           clearTimeout(timer);
-          resolve(this.readyEvents[count - 1]);
+          resolve(seen()[count - 1]);
         },
       });
     });
+  }
+
+  waitForReady(count: number, timeoutMs = 10_000): Promise<BridgeEvent> {
+    return this.waitFor('ready', count, timeoutMs);
   }
 
   dispose(): void {
@@ -171,6 +198,24 @@ describe('bridge ready-event model', () => {
 
     harness.send('/1m off');
     expect((await harness.waitForReady(3)).model).toBe('claude-opus-5');
+  }, 20_000);
+
+  it('labels the context window with the same limits the gauge uses', async () => {
+    harness = new BridgeHarness('claude-opus-5');
+    await harness.waitForReady(1);
+
+    const beforeOn = harness.count('status');
+    harness.send('/1m on');
+    const onStatus = await harness.waitFor('status', beforeOn + 1);
+    expect(onStatus.message).toBe(`Context window: ${limitLabel(CONTEXT_LIMIT_1M)}`);
+
+    const beforeOff = harness.count('status');
+    harness.send('/1m off');
+    const offStatus = await harness.waitFor('status', beforeOff + 1);
+    expect(offStatus.message).toBe(`Context window: ${limitLabel(CONTEXT_LIMIT_DEFAULT)}`);
+
+    // The regression: this read "200K" while the gauge beside it showed 250k.
+    expect(offStatus.message).not.toContain('200K');
   }, 20_000);
 
   it('falls back to the default model when CLAUDIA_MODEL is unset', async () => {
